@@ -1,0 +1,2482 @@
+What is NexScript?
+NexScript is a high-level programming language for smart contracts on Nexa. It offers a strong abstraction layer over Nexa's native virtual machine, Nexa Script. The project is a fork of CashScript for Bitcoin Cash. Its syntax is based on Ethereum's smart contract language Solidity, but its functionality is very different since smart contracts on Nexa differ greatly from smart contracts on Ethereum.
+
+If you're interested to see what kind of things can be built with NexScript, you can look at the Examples provided. If you just want to dive into NexScript, refer to the Getting Started page and other pages in the documentation.
+
+Getting Started
+Installing the NexScript compiler
+The command line NexScript compiler nexc can be installed from NPM.
+
+npm install -g @nexscript/nexc
+
+Installing the NexScript SDK
+The NexScript SDK can be installed into your project with NPM.
+
+npm install @nexscript/nexscript
+
+caution
+NexScript only offers a NexScript SDK, but NexScript contracts can be integrated into other languages as well. Because there are no ready-to-use SDKs available for them, this is considered advanced usage, and it is recommended to use the JavaScript SDK.
+
+Writing your first smart contract
+There are some examples available on the Examples page, that can be used to take inspiration from. Further examples of the JavaScript integration can be found on GitHub. A simple example is included below.
+
+pragma nexscript ^0.1.0;
+
+contract TransferWithTimeout(pubkey sender, pubkey recipient, int timeout) {
+    // Allow the recipient to claim their received money
+    function transfer(sig recipientSig) {
+        require(checkSig(recipientSig, recipient));
+    }
+
+    // Allow the sender to reclaim their sent money after the timeout is reached
+    function timeout(sig senderSig) {
+        require(checkSig(senderSig, sender));
+        require(tx.time >= timeout);
+    }
+}
+
+tip
+Read more about the Nexscript language syntax in the Language Description.
+
+Integrating into JavaScript
+While more detailed examples are available on GitHub, we show an integration of the TransferWithTimeout contract in a JavaScript project.
+
+After compiling the contract file to an artifact JSON with nexc, it can be imported into the NexScript SDK.
+
+nexc ./transfer_with_timeout.nex --output ./transfer_with_timeout.json
+
+import { ElectrumNetworkProvider, Contract, SignatureTemplate } from '@nexscript/nexscript';
+import { alicePriv, alicePub, bobPriv, bobPub } from './keys.js';
+import artifact from './transfer_with_timeout.json';
+
+// Initialise a network provider for network operations
+const provider = new ElectrumNetworkProvider('mainnet');
+
+// Instantiate a new TransferWithTimeout contract
+const contract = new Contract(artifact, [alicePub, bobPub, 100000n], { provider });
+
+// Call the transfer function with Bob's signature
+// i.e. Bob claims the money that Alice has sent him
+const transferDetails = await contract.functions
+  .transfer(new SignatureTemplate(bobPriv))
+  .to('nexa:nqtsq5g537fcf6z85pgwk4my5e5ddmypa2sm47mkzavt6zky', 10000n)
+  .send();
+console.log(transferDetails);
+
+// Call the timeout function with Alice's signature
+// i.e. Alice recovers the money that Bob has not claimed
+const timeoutDetails = await contract.functions
+  .timeout(new SignatureTemplate(alicePriv))
+  .to('nexa:nqtsq5g5wtkt44pfqusjj3wulk2n2pd27lhpzg0m326kcnsj', 10000n)
+  .send();
+console.log(timeoutDetails);
+
+Command Line Interface
+The nexc command line interface is used to compile NexScript .nex files into .json artifact files. These artifacts can be imported and used by the JavaScript SDK or other libraries / applications that use NexScript. For more information on this artifact format refer to Artifacts.
+
+Installation
+You can use npm to install the nexc command line tool globally.
+
+npm install -g @nexscript/nexc
+
+Usage
+The nexc CLI tool can be used to compile .nex files to JSON artifact files.
+
+Usage: nexc [options] [source_file]
+
+Options:
+  -V, --version        Output the version number.
+  -o, --output <path>  Specify a file to output the generated artifact.
+  -h, --hex            Compile the contract to hex format rather than a full artifact.
+  -A, --asm            Compile the contract to ASM format rather than a full artifact.
+  -c, --opcount        Display the number of opcodes in the compiled bytecode.
+  -s, --size           Display the size in bytes of the compiled bytecode.
+  -?, --help           Display help
+
+  Contract Structure
+Contracts in NexScript are somewhat similar to classes in object-oriented languages. A notable difference is that there is no mutable state. So once a contract is instantiated with certain parameters, these values cannot change. Instead, functions can be called on the contract that act on the contract's values to spend money from the contract. The extension for NexScript source code files is .nex, and the structure of these source files is explained below.
+
+Pragma
+A contract file may start with a pragma directive to indicate the NexScript version the contract was written for. This ensures that a contract is not compiled with an unsupported compiler version, which could cause unintended side effects.
+
+note
+The pragma directive follows regular semantic versioning rules.
+
+Example
+pragma nexscript ^0.1.0;
+pragma nexscript >= 0.2.0 < 0.3.4;
+
+Constructor
+A NexScript constructor works slightly differently than what you might be used to in regular object-oriented languages. It is not possible to define any statements inside the constructor, as the constructor is only used to store values in the contract. Because of this limited nature, there is no separate constructor function, but instead the parameters are specified directly on the class definition.
+
+On nexa contract constructor parameters can be visible and hidden (private to the contract body). Visible arguments will be added to the tail of nexa contract address. See more information in the spec.
+
+To indicate that NexScript's contract constructor parameter is visible to all potential spenders, the use of visible keyword is required.
+
+In addition visible parameters can serve as a commitment message, playing a role when indexing contract addresses or giving a hint about this contract's behaviour. Such commitments might not even be used in the contract itself. To instruct NexScript compiler to ignore such a commitment parameter it shall be attributed with visible unused modifier. See example below.
+
+contract OneOfTwo(bytes20 pkh1, bytes32 hash1, bytes20 visible pkh2, bytes32 visible unused hash2)
+
+
+Note, that because visible parameters are pushed to the altstack after private ones, visible parameters should always be declared after private parameters. As shown in the above code snippet.
+
+The following declaration would be wrong and render the script unspendable (because private parameter is declared after visible):
+
+contract OneOfTwo(bytes20 pkh1, bytes32 hash1, bytes20 visible pkh2, bytes32 hash2)
+
+
+Example
+pragma nexscript ^0.1.0;
+
+contract HTLC(pubkey sender, pubkey recipient, int expiration, bytes32 hash) {
+    ...
+}
+
+note
+Upon initialization of the contract, constructor parameters are encoded and added to the contract's bytecode in the reversed order of their declaration. This can be important when manually initializing contracts for debugging purposes.
+
+Functions
+The main construct in a NexScript contract is the function. A contract can contain one or multiple functions that can be executed to trigger transactions that spend money from the contract. In the basics the result of a function is just a yes or no answer to the question 'Can money be sent out of this contract?'. But by using a technique called covenants, it is possible to specify other conditions, like restricting where money can be sent. To read more about this technique, refer to the NexScript Covenants Guide.
+
+Example
+pragma nexscript ^0.1.0;
+
+contract TransferWithTimeout(pubkey sender, pubkey recipient, int timeout) {
+    function transfer(sig recipientSig) {
+        ...
+    }
+
+    function timeout(sig senderSig) {
+        ...
+    }
+}
+
+note
+Function parameters are passed in the reversed order of their declaration. This can be important when manually creating contract transactions for debugging purposes.
+
+Statements
+NexScript functions are made up of a collection of statements that determine whether money may be spent from the contract.
+
+require()
+The most important statement of NexScript contracts is the require statement. This statement takes a boolean expression and checks that it evaluates to true. If it evaluates to false instead, the transaction fails. This statement is used to ensure that the requirements are met to spend money from the contract.
+
+Example
+pragma nexscript ^0.1.0;
+
+contract P2PKH(bytes20 pkh) {
+    function spend(pubkey pk, sig s) {
+        require(hash160(pk) == pkh);
+        require(checkSig(s, pk));
+    }
+}
+
+Variable declaration
+Variables can be declared by specifying their type and name. All variables need to be initialised at the time of their declaration, but can be reassigned later on - unless specifying the constant keyword. Since NexScript is strongly typed and has no type inference, it is not possible to use keywords such as var or let to declare variables.
+
+caution
+NexScript disallows variable shadowing and unused variables.
+
+Example
+int myNumber = 3000;
+string constant myString = 'Nexa';
+
+Variable assignment
+After their initial declaration, any variable can be reassigned later on. However, NexScript lacks any compound assignment operators such as += or -=.
+
+Example
+i = i + 1;
+hashedValue = sha256(hashedValue);
+myString = 'Nexa rocks!';
+
+Control structures
+The only control structures in NexScript are if and else statements. This is due to limitations in the underlying Script which currently prevent loops, recursion, and return statements. If-else statements follow usual semantics known from languages like C or JavaScript.
+
+note
+There is no implicit type conversion from non-boolean to boolean types. So if (1) { ... } is not valid NexScript and should instead be written as if (bool(1)) { ... }
+
+Example
+pragma nexscript ^0.1.0;
+
+contract OneOfTwo(bytes20 pkh1, bytes32 hash1, bytes20 pkh2, bytes32 hash2) {
+    function spend(pubkey pk, sig s, bytes message) {
+        require(checkSig(s, pk));
+        bytes20 pkh = hash160(pk);
+
+        if (pkh == pkh1) {
+            require(sha256(message) == hash1);
+        } else if (pkh == pkh2) {
+            require(sha256(message) == hash2);
+        } else {
+            require(false); // fail
+        }
+    }
+}
+
+Comments
+Comments can be added anywhere in the contract file. Comment semantics are similar to languages like JavaScript or C. This means that single-line comments can be added with // ..., while multiline comments can be added with /* ... */.
+
+Example
+// This is a single-line comment.
+
+/*
+This is a
+multi-line comment.
+*/
+
+NexScript is a statically typed language, which means that the type of each variable needs to be specified. Types can also be implicitly or explicitly cast to other types. For a quick reference of the various casting possibilities, see Type Casting.
+
+Boolean
+bool: The possible values are constants true and false.
+
+Operators:
+
+! (logical negation)
+&& (logical conjunction, “and”)
+|| (logical disjunction, “or”)
+== (equality)
+!= (inequality)
+note
+The operators || and && don't apply common short-circuiting rules. This means that in the expression f(x) || g(y), g(y) will still be executed even if f(x) evaluates to true.
+
+Integer
+int: Signed integer of 64 bit size.
+
+Operators:
+
+Comparisons: <=, <, ==, !=, >=, > (all evaluate to bool)
+Arithmetic operators: +, -, unary -, *, /, % (modulo).
+Note the clear lack of the ** (exponentiation) operator as well as any bitwise operators.
+
+caution
+The script will fail when the right hand side of Division and modulo operations is zero.
+
+Date Parsing
+Dates and times are always represented as integers. To get the UTC timestamp of a date use the built-in parser to avoid any potential errors. This will take a date in the format date("YYYY-MM-DDThh:mm:ss") and convert it to an integer timestamp.
+
+Example
+int timestamp = date("2021-02-17T01:30:00");
+require(timestamp == 1613554200);
+
+String
+string: UTF8-encoded byte sequence.
+
+Operators:
+
++ (concatenation)
+== (equality)
+!= (inequality)
+Members:
+
+length: Number of characters in the string.
+split(int): Splits the string at the specified index and returns a tuple with the two resulting strings.
+reverse(): Reverses the string.
+caution
+The script will fail if split() is called with an index that is out of bounds.
+
+Bytes
+bytes: Byte sequence. Can optionally be bound to a byte length by specifying e.g. bytes4, bytes32, bytes64. It is also possible to use byte as an alias for bytes1.
+
+Operators:
+
++ (concatenation)
+== (equality)
+!= (inequality)
+Members:
+
+length: Number of bytes in the sequence.
+split(int): Splits the byte sequence at the specified index and returns a tuple with the two resulting byte sequences.
+reverse(): Reverses the byte sequence.
+caution
+The script will fail if split() is called with an index that is out of bounds.
+
+Bytes types with semantic meaning
+Some byte sequences hold specific meanings inside Nexa contracts. These have been granted their own types separate from the regular bytes type.
+
+Public Key
+pubkey: Byte sequence representing a public key. Generally 33 bytes long.
+
+Operators:
+
+== (equality)
+!= (inequality)
+Transaction Signature
+sig: Byte sequence representing a transaction signature. Generally 65 bytes long.
+
+Operators:
+
+== (equality)
+!= (inequality)
+Data Signature
+datasig: Byte sequence representing a data signature. Generally 64 bytes long.
+
+Operators:
+
+== (equality)
+!= (inequality)
+Array
+Arrays are not assignable and can only be used with the checkMultisig function using the following syntax:
+
+checkMultisig([sig1, sig2], [pk1, pk2, pk3]);
+
+Tuple
+Tuples are the type that is returned when calling the split member function on a string or bytes type. Their first or second element can be accessed through an indexing syntax similar to other languages:
+
+string question = "What is Nexa's ticker?";
+string answer = question.split(12)[0].split(8)[1];
+
+It is also possible to assign both sides of the tuple at once with a destructuring syntax:
+
+string trilemma, string solved = "100,000TPS".split(7);
+require(trilemma == solved);
+
+Type Casting
+Type casting can be done both explicitly and implicitly as illustrated below. pubkey, sig and datasig can be implicitly cast to bytes, meaning they can be used anywhere where you would normally use a bytes type. Explicit type casting can be done with a broader range of types, but is still limited. The syntax of this explicit type casting is illustrated below. Note that you can also cast to bounded bytes types.
+
+note
+When casting integer types to bytes of a certain size, the integer value is padded with zeros. e.g. bytes4(0) == 0x00000000. It is also possible to pad with a variable number of zeros, by passing in a size parameter, which indicates the size of the output. e.g. bytes(0, 4 - 2) == 0x0000. Lastly, note that bytes(0) == 0x.
+
+caution
+When casting bytes types to integer, you should be sure that the bytes value fits inside a 64-bit signed integer, or the script will fail.
+
+See the following table for information on which types can be cast to other which other types.
+
+Type	Implicitly castable to	Explicitly castable to
+int		bytes, bool
+bool		int
+string		bytes
+bytes		sig, pubkey, int
+pubkey	bytes	bytes
+sig	bytes	bytes
+datasig	bytes	bytes
+Example
+pubkey pk = pubkey(0x0000);
+bytes editedPk = bytes(pk) + 0x1234;
+bytes4 integer = bytes4(25);
+
+Global Functions & Operators
+NexScript has several built-in functions for things like cryptographic and arithmetic applications, and it includes many common arithmetic and other operators that you would expect in a programming language.
+
+Arithmetic functions
+abs()
+int abs(int a)
+
+Returns the absolute value of argument a.
+
+min()
+int min(int a, int b)
+
+Returns the minimum value of arguments a and b.
+
+max()
+int max(int a, int b)
+
+Returns the maximum value of arguments a and b.
+
+within()
+bool within(int x, int lower, int upper)
+
+Returns true if and only if x >= lower && x < upper.
+
+Hashing functions
+ripemd160()
+bytes20 ripemd160(any x)
+
+Returns the RIPEMD-160 hash of argument x.
+
+sha1()
+bytes20 sha1(any x)
+
+Returns the SHA-1 hash of argument x.
+
+sha256()
+bytes32 sha256(any x)
+
+Returns the SHA-256 hash of argument x.
+
+hash160()
+bytes20 hash160(any x)
+
+Returns the RIPEMD-160 hash of the SHA-256 hash of argument x.
+
+hash256()
+bytes32 hash256(any x)
+
+Returns the double SHA-256 hash of argument x.
+
+Signature checking functions
+caution
+All signature checking functions must comply with the NULLFAIL rule. This means that if you want to use the output of a signature check inside the condition of an if-statement, the input signature needs to either be correct, or an empty byte array. When you use an incorrect signature as an input, the script will fail.
+
+checkSig()
+bool checksig(sig s, pubkey pk)
+
+Checks that transaction signature s is valid for the current transaction and matches with public key pk.
+
+checkMultiSig()
+bool checkMultiSig(sig[] sigs, pubkey[] pks)
+
+Performs a multi-signature check using a list of transaction signatures and public keys.
+
+note
+While this function can be used inside your smart contracts, it is not supported by the JavaScript SDK, so it is recommended not to use it. Instead a checkMultiSig() call can be simulated using multiple checkSig() calls.
+
+checkDataSig()
+bool checkDataSig(datasig s, bytes msg, pubkey pk)
+
+Checks that sig s is a valid signature for message msg and matches with public key pk.
+
+encodeNumber()
+bytes encodeNumber(int number)
+
+Minimally encodes the number to VM data. Useful in covenants and digest building. Currently limited to positive number only.
+
+encodeData()
+bytes encodeData(bytes data)
+
+Minimally encodes the data to VM data. Useful in covenants and digest building. Currently limited to data sizes less than 76 to be compatible with OP_PUSHDATA1.
+
+Operators
+An overview of all supported operators and their precedence is included below. Notable is a lack of exponentiation, since these operations are not supported by the underlying Script.
+
+Precedence	Description	Operator
+1	Parentheses	(<expression>)
+2	Type cast	<type>(<expression>)
+3	Object instantiation	new <class>(<args...>)
+4	Function call	<function>(<args...>)
+5	Tuple index	<tuple>[<index>]
+6	Member access	<object>.<member>
+7	Unary minus	-
+7	Logical NOT	!
+8	Multiplication, division and modulo	*, /, %
+9	Addition and subtraction	+, -
+9	String / bytes concatenation	+
+10	Numeric comparison	<, >, <=, >=
+11	Equality and inequality	==, !=
+12	Bitwise AND	&
+13	Bitwise XOR	^
+14	Bitwise OR	|
+15	Logical AND	&&
+16	Logical OR	||
+17	Assignment	=
+
+Global Variables
+Globally available units
+An integer literal can take a suffix of either monetary or temporary units to add semantic value to these integers and to simplify arithmetic. When these units are used, the underlying integer is automatically multiplied by the value of the unit. The units sats, nexa, mnexa and mex are used to denote monetary value, while the units seconds, minutes, hours, days and weeks are used to denote time.
+
+caution
+Be careful when using these units in precise calendar calculations though, because not every year equals 365 days and not even every minute has 60 seconds because of leap seconds.
+
+Example
+require(1 sats == 1);
+require(1 nexa == 100);
+require(1 mnexa == 100000000);
+require(1 mex == 100000000);
+
+require(1 seconds == 1);
+require(1 minutes == 60 seconds);
+require(1 hours == 60 minutes);
+require(1 days == 24 hours);
+require(1 weeks == 7 days);
+
+Global time lock variables
+Nexa has support for different kinds of time locks, which can be used to specify time-based conditions inside Nexa contracts. These time locks can be separated by three main attributes: location, targeting and metric. The location can be the transaction level or the contract level, but contract level locks also require you to use a corresponding transaction level lock. The targeting can be relative (e.g. at least 4 hours have passed) or absolute (e.g. the block number is at least 600,000). The metric can be blocks or seconds.
+
+It can be difficult to fully grasp the intricacies of time locks, so if you're starting out it is recommended to start off with the simplest version: absolute block-based time locks. If you do want to dive into the more advanced uses of time locks, James Prestwich wrote the best article explaining time locks in Bitcoin that also fully applies to Nexa.
+
+tx.time
+tx.time is used to create absolute time locks. The value of tx.time can either represent the block number of the spending transaction or its timestamp. When comparing it with values below 500,000,000, it is treated as a blocknumber, while higher values are treated as a timestamp.
+
+Due to limitations in the underlying Script, tx.time can only be used in the following way:
+
+require(tx.time >= <expression>);
+
+Because of the way time locks work, a corresponding time lock needs to be added to the transaction. The NexScript SDK automatically sets this transaction level time lock to the most recent block number, as this is the most common use case. If you need to use a different block number or timestamp, this should be passed into the NexScript SDK using the withTime() function. If the default matches your use case, no additional actions are required.
+
+note
+tx.time corresponds to the nLocktime field of the current transaction and the OP_CHECKLOCKTIMEVERIFY opcode.
+
+tx.age
+tx.age is used to create relative time locks. The value of tx.age can either represent a number of blocks, or a number of chunks, which are 512 seconds. The corresponding transaction level time lock determines which of the two options is used.
+
+Due to limitations in the underlying Script, tx.age can only be used in the following way:
+
+require(tx.age >= <expression>);
+
+Because of the way time locks work, a corresponding time lock needs to be added to the transaction. This can be done in the NexScript SDK using the withAge() function. However, the value passed into this function will always be treated as a number of blocks, so it is currently not supported to use tx.age as a number of second chunks.
+
+note
+tx.age corresponds to the nSequence field of the current UTXO and the OP_CHECKSEQUENCEVERIFY opcode.
+
+Introspection variables
+Introspection functionality is used to create covenant contracts. Covenants are a technique used to put constraints on spending the money inside a smart contract. The main use case of this is limiting the addresses where money can be sent and the amount sent. To explore the possible uses of covenants inside smart contracts, read the NexScript Covenants Guide.
+
+this.activeInputIndex
+int this.activeInputIndex
+
+During the validation of a Nexa transaction, every transaction input is evaluated in order, and the contract's code is evaluated in the context of the different inputs. this.activeInputIndex represents the index of the input that is currently being evaluated. This can be used in conjunction with the properties under tx.inputs.
+
+this.activeBytecode
+bytes this.activeBytecode
+
+During the validation of a Nexa transaction, every transaction input is evaluated in order, and the contract's code is evaluated in the context of the different inputs. this.activeBytecode represents the contract bytecode of the input that is currently being evaluated.
+
+tx.version
+int tx.version
+
+Represents the version of the current transaction. Different transaction versions can have differences in functionality. Currently only version 1 and 2 exist, where only version 2 has support for BIP68.
+
+tx.locktime
+int tx.locktime
+
+Represents the nLocktime field of the transaction.
+
+note
+tx.locktime is similar to the tx.time global variable. It is recommended to only use tx.locktime for adding nLocktime to simulated state and tx.time in all other cases.
+
+tx.inputs
+Represents the list of inputs of the evaluated transaction. This is an array, and cannot be used on itself. You need to access an input with a specific index and specify the properties you want to access.
+
+tx.inputs.length
+int tx.inputs.length
+
+Represents the number of inputs in the transaction.
+
+tx.inputs[i].value
+int tx.inputs[i].value
+
+Represents the value of a specific input (in satoshis).
+
+tx.inputs[i].lockingBytecode
+bytes tx.inputs[i].lockingBytecode
+
+Represents the locking bytecode (scriptPubKey) of a specific input.
+
+tx.inputs[i].unlockingBytecode
+bytes tx.inputs[i].unlockingBytecode
+
+Represents the unlocking bytecode (scriptSig) of a specific input.
+
+tx.inputs[i].outpointTransactionHash
+bytes32 tx.inputs[i].outpointTransactionHash
+
+Represents the outpoint transaction hash where a specific input was initially locked.
+
+tx.inputs[i].outpointIndex
+int tx.inputs[i].outpointIndex
+
+Represents the outpoint index where a specific input was initially locked.
+
+tx.inputs[i].sequenceNumber
+int tx.inputs[i].sequenceNumber
+
+Represents the nSequence number of a specific input.
+
+tx.inputs[i].tokenGroupId
+bytes tx.inputs[i].tokenGroupId
+
+Represents the tokenGroupId of a specific input. Returns 0x when that specific input contains no group. When the input contains a subgroup (NFT) only first 32 bytes of full group ID will be returned (parent group).
+
+tx.inputs[i].tokenSubgroupId
+bytes tx.inputs[i].tokenSubgroupId
+
+Represents the tokenSubgroupId of a specific input. Returns 0x when that specific input contains no group or no subgroup (NFT).
+
+tx.inputs[i].subgroupData
+bytes tx.inputs[i].subgroupData
+
+Represents the subgroup (NFT) data commitment of a specific input. Returns 0x if input has no subgroup (NFT).
+
+tx.inputs[i].tokenAmount
+int tx.inputs[i].tokenAmount
+
+Represents the token amount of a specific input. Returns 0 if input is ungrouped.
+
+tx.inputs[i].visibleParameters
+bytes tx.inputs[i].visibleParameters
+
+Represents the visible contract parameters of a P2ST utxo being spent as push-only script bytes data, minimally encoded. E.g. if there are two parameters OP_1 and 0xbeef, the result of this function will be 0x5102beef.
+
+tx.outputs
+Represents the list of outputs of the evaluated transaction. This is an array, and cannot be used on itself. You need to access an output with a specific index and specify the properties you want to access.
+
+tx.outputs.length
+int tx.outputs.length
+
+Represents the number of outputs in the transaction.
+
+tx.outputs[i].value
+int tx.outputs[i].value
+
+Represents the value of a specific output (in satoshis).
+
+tx.outputs[i].lockingBytecode
+bytes tx.outputs[i].lockingBytecode
+
+Represents the locking bytecode (scriptPubKey) of a specific output.
+
+tx.outputs[i].tokenGroupId
+bytes tx.outputs[i].tokenGroupId
+
+Represents the tokenGroupId of a specific output. Returns 0x when that specific output contains no group. When the output contains a subgroup (NFT) only first 32 bytes of full group ID will be returned (parent group).
+
+tx.outputs[i].tokenSubgroupId
+bytes tx.outputs[i].tokenSubgroupId
+
+Represents the tokenSubgroupId of a specific output. Returns 0x when that specific output contains no group or no subgroup (NFT).
+
+tx.outputs[i].subgroupData
+bytes tx.outputs[i].subgroupData
+
+Represents the subgroup (NFT) data commitment of a specific output. Returns 0x if output has no subgroup (NFT).
+
+tx.outputs[i].tokenAmount
+int tx.outputs[i].tokenAmount
+
+Represents the token amount of a specific output. Returns 0 if output is ungrouped.
+
+tx.outputs[i].visibleParameters
+bytes tx.outputs[i].visibleParameters
+
+Represents the visible contract parameters of a P2ST output produced by this contract as push-only script bytes data, minimally encoded. E.g. if there are two parameters OP_1 and 0xbeef, the result of this function will be 0x5102beef.
+
+Transaction state variables and functions
+In addition to transaction introspectio, Nexa introduces transaction state lookup which further greatly improves covenant contracts. See specificationspec.
+
+tx.id
+bytes32 tx.id
+
+Gets information about transaction id in native endianness.
+
+tx.idem
+bytes32 tx.idem
+
+Gets information about transaction idem in native endianness.
+
+tx.amountIn
+int tx.amountIn
+
+Gets information about transaction's total incoming native cryptocurrency in its finest unit (sum of all input satoshi values).
+
+tx.amountOut
+int tx.amountOut
+
+Gets information about transaction's total outgoing native cryptocurrency in its finest unit (sum of all output satoshi values).
+
+tx.groupAmountIn()
+int tx.groupAmountIn(groupId)
+
+Gets information about total incoming tokens of group indicated by 32 bytes long groupId. Limited to 8 bytes, overflows wrap.
+
+tx.groupAmountOut()
+int tx.groupAmountOut(groupId)
+
+Gets information about total outgoing tokens of group indicated by 32 bytes long groupId. Limited to 8 bytes, overflows wrap.
+
+tx.groupCountIn()
+int tx.groupCountIn(groupId)
+
+Gets information about number of inputs using a group indicated by 32 bytes long groupId.
+
+tx.groupCountOut()
+int tx.groupCountOut(groupId)
+
+Gets information about number of outputs using a group indicated by 32 bytes long groupId.
+
+tx.groupNthInput()
+int tx.groupNthInput(index, groupId)
+
+Gets information about the 0-based input index of Nth grouped input indicated by 32 bytes long groupId. Fails if inputs does not exist.
+
+tx.groupNthOutput()
+int tx.groupNthOutput(index, groupId)
+
+Gets information about the 0-based output index of Nth grouped output indicated by 32 bytes long groupId. Fails if outputs does not exist.
+
+Constructing locking bytecode
+One of the main use cases of covenants is enforcing transaction outputs (where money is sent). To assist with enforcing these outputs, there is a number of LockingBytecode objects that can be instantiated. These locking bytecodes can then be compared to the locking bytecodes of transaction outputs.
+
+Example
+bytes25 lockingBytecode = new LockingBytecodeP2PKT(pkh);
+int value = 10000;
+require(tx.outputs[0].lockingBytecode == lockingBytecode);
+require(tx.outputs[0].value == value);
+
+LockingBytecodeP2PKT
+new LockingBytecodeP2PKT(bytes20 pkConstraintHash): bytes23
+
+Creates new P2PKT locking bytecode for the hash of the constraints script pkConstraintHash, because the constrain is a push script for a public key.
+
+LockingBytecodeP2ST
+new LockingBytecodeP2ST(bytes20 templateHash, bytes constraintHash, bytes visibleParameters): bytes
+
+
+Creates new P2ST locking bytecode for the template script hash templateHash, the constraints script hash constraintHash given the minimally encoded visible parameters.
+
+LockingBytecodeNullData
+new LockingBytecodeNullData(bytes[] chunks): bytes
+
+Creates new OP_RETURN locking bytecode with chunks as its OP_RETURN data.
+
+Artifacts
+Compiled contracts can be represented by so-called artifacts. These artifacts contain all information that is needed to interact with the smart contracts on-chain. Artifacts are stored in .json files so they can be shared and stored for later usage without having to recompile the contract.
+
+Did you know?
+Artifacts allow any third-party SDKs to be developed, since these SDKs only need to import and use an artifact file, while the compilation of the contract is left to the official nexc compiler.
+
+Artifact specification
+interface Artifact {
+  contractName: string // Contract name
+  constructorInputs: AbiInput[] // Arguments required to instantiate a contract
+  abi: AbiFunction[] // functions that can be called
+  bytecode: string // Compiled Script without constructor parameters added (in ASM format)
+  source: string // Source code of the NexScript contract
+  compiler: {
+    name: string // Compiler used to compile this contract
+    version: string // Compiler version used to compile this contract
+  }
+  updatedAt: string // Last datetime this artifact was updated (in ISO format)
+}
+
+interface AbiInput {
+  name: string // Input name
+  type: string // Input type (see language documentation)
+}
+
+interface AbiFunction {
+  name: string // Function name
+  inputs: AbiInput[] // Function inputs / parameters
+}
+
+
+
+Language Grammar
+grammar CashScript;
+
+sourceFile
+    : pragmaDirective* contractDefinition EOF
+    ;
+
+pragmaDirective
+    : 'pragma' pragmaName pragmaValue ';'
+    ;
+
+pragmaName
+    : 'nexscript'
+    ;
+
+pragmaValue
+    : versionConstraint versionConstraint?
+    ;
+
+versionConstraint
+    : versionOperator? VersionLiteral
+    ;
+
+versionOperator
+    : '^' | '~' | '>=' | '>' | '<' | '<=' | '='
+    ;
+
+contractDefinition
+    : 'contract' Identifier parameterList '{' functionDefinition* '}'
+    ;
+
+parameterModifier
+    : 'visible' | 'unused'
+    ;
+
+functionDefinition
+    : 'function' Identifier parameterList '{' statement* '}'
+    ;
+
+parameterList
+    : '(' (parameter (',' parameter)* ','?)? ')'
+    ;
+
+parameter
+    : typeName parameterModifier* Identifier
+    ;
+
+block
+    : '{' statement* '}'
+    | statement
+    ;
+
+statement
+    : variableDefinition
+    | tupleAssignment
+    | assignStatement
+    | timeOpStatement
+    | requireStatement
+    | ifStatement
+    ;
+
+variableDefinition
+    : typeName modifier* Identifier '=' expression ';'
+    ;
+
+tupleAssignment
+    : typeName Identifier ',' typeName Identifier '=' expression ';'
+    ;
+
+assignStatement
+    : Identifier '=' expression ';'
+    ;
+
+timeOpStatement
+    : 'require' '(' TxVar '>=' expression ')' ';'
+    ;
+
+requireStatement
+    : 'require' '(' expression ')' ';'
+    ;
+
+ifStatement
+    : 'if' '(' expression ')' ifBlock=block ('else' elseBlock=block)?
+    ;
+
+functionCall
+    : Identifier expressionList // Only built-in functions are accepted
+    ;
+
+expressionList
+    : '(' (expression (',' expression)* ','?)? ')'
+    ;
+
+expression
+    : '(' expression ')' # Parenthesised
+    | typeName '(' castable=expression (',' size=expression)? ','? ')' # Cast
+    | functionCall # FunctionCallExpression
+    | scope='tx' op=('.groupAmountIn' | '.groupAmountOut' | '.groupCountIn' | '.groupCountOut' | '.groupNthInput' | '.groupNthOutput') expressionList # FunctionCallExpression
+    | 'new' Identifier expressionList #Instantiation
+    | expression '[' index=NumberLiteral ']' # TupleIndexOp
+    | scope='tx.outputs' '[' expression ']' op=('.value' | '.lockingBytecode' | '.tokenGroupId' | '.tokenSubgroupId' | '.subgroupData' | '.tokenAmount' | '.visibleParameters') # UnaryIntrospectionOp
+    | scope='tx.inputs' '[' expression ']' op=('.value' | '.lockingBytecode' | '.outpointTransactionHash' | '.outpointIndex' | '.unlockingBytecode' | '.sequenceNumber' | '.tokenGroupId' | '.tokenSubgroupId' | '.subgroupData' | '.tokenAmount' | '.visibleParameters') # UnaryIntrospectionOp
+    | expression op=('.reverse()' | '.length') # UnaryOp
+    | left=expression op='.split' '(' right=expression ')' # BinaryOp
+    | op=('!' | '-') expression # UnaryOp
+    | left=expression op=('*' | '/' | '%') right=expression # BinaryOp
+    | left=expression op=('+' | '-') right=expression # BinaryOp
+    // | expression ('>>' | '<<') expression --- OP_LSHIFT & RSHIFT are disabled in BCH Script
+    | left=expression op=('<' | '<=' | '>' | '>=') right=expression # BinaryOp
+    | left=expression op=('==' | '!=') right=expression # BinaryOp
+    | left=expression op='&' right=expression # BinaryOp
+    | left=expression op='^' right=expression # BinaryOp
+    | left=expression op='|' right=expression # BinaryOp
+    | left=expression op='&&' right=expression # BinaryOp
+    | left=expression op='||' right=expression # BinaryOp
+    | '[' (expression (',' expression)* ','?)? ']' # Array
+    | NullaryOp # NullaryOp
+    | Identifier # Identifier
+    | literal # LiteralExpression
+    ;
+
+modifier
+    : 'constant'
+    ;
+
+literal
+    : BooleanLiteral
+    | numberLiteral
+    | StringLiteral
+    | DateLiteral
+    | HexLiteral
+    ;
+
+numberLiteral
+    : NumberLiteral NumberUnit?
+    ;
+
+typeName
+    : 'int' | 'bool' | 'string' | 'pubkey' | 'sig' | 'datasig' | Bytes
+    ;
+
+VersionLiteral
+    : [0-9]+ '.' [0-9]+ '.' [0-9]+
+    ;
+
+BooleanLiteral
+    : 'true' | 'false'
+    ;
+
+NumberUnit
+    : 'satoshis' | 'sats' | 'nexa' | 'mnexa' | 'mex'
+    | 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks'
+    ;
+
+NumberLiteral
+    : [-]?[0-9]+ ([eE] [0-9]+)?
+    ;
+
+Bytes
+    : 'bytes' Bound? | 'byte'
+    ;
+
+Bound
+    : [1-9] [0-9]*
+    ;
+
+StringLiteral
+    : '"' ('\\"' | ~["\r\n])*? '"'
+    | '\'' ('\\\'' | ~['\r\n])*? '\''
+    ;
+
+DateLiteral
+    : 'date(' StringLiteral ')'
+    ;
+
+HexLiteral
+    : '0' [xX] [0-9A-Fa-f]*
+    ;
+
+TxVar
+    : 'tx.age'
+    | 'tx.time'
+    ;
+
+NullaryOp
+    : 'this.activeInputIndex'
+    | 'this.activeBytecode'
+    | 'tx.inputs.length'
+    | 'tx.outputs.length'
+    | 'tx.version'
+    | 'tx.locktime'
+    | 'tx.id'
+    | 'tx.idem'
+    | 'tx.amountIn'
+    | 'tx.amountOut'
+    ;
+
+Identifier
+    : [a-zA-Z] [a-zA-Z0-9_]*
+    ;
+
+WHITESPACE
+    : [ \t\r\n\u000C]+ -> skip
+    ;
+
+COMMENT
+    : '/*' .*? '*/' -> channel(HIDDEN)
+    ;
+
+LINE_COMMENT
+    : '//' ~[\r\n]* -> channel(HIDDEN)
+    ;
+
+
+Examples
+An extensive collection of examples is available in the GitHub repository. Below we discuss a few of these examples in more details and go through the functionality.
+
+Transfer With Timeout
+One interesting use case of Nexa is using it for paper tips. With paper tips, you send a small amount of money to an address, and print the corresponding private key on a piece of paper. Then you can hand out these pieces of paper as a tip or gift to people in person. In practice, however, people might not know what to do with these gifts or they might lose or forget about it.
+
+As an alternative, a smart contract can be used for these kinds of gifts. This smart contract allows the recipient to claim their gift at any time, but if they don't claim it in time, the sender can reclaim it.
+
+pragma nexscript ^0.1.0;
+
+contract TransferWithTimeout(pubkey sender, pubkey recipient, int timeout) {
+    // Require recipient's signature to match
+    function transfer(sig recipientSig) {
+        require(checkSig(recipientSig, recipient));
+    }
+
+    // Require timeout time to be reached and sender's signature to match
+    function timeout(sig senderSig) {
+        require(checkSig(senderSig, sender));
+        require(tx.time >= timeout);
+    }
+}
+
+PriceVault
+For better or worse, HODLing and waiting for price increases is one of the main things people want to do with their cryptocurrency. But it can be difficult to hold on to your cryptocurrency when the price is going down. So to prevent weak hands from getting the best of you, it's better to store your stash in a smart contract that enforces HODLing for you.
+
+This smart contract works by connecting with a price oracle. This price oracle is a trusted entity that publishes the NEXA/USD price every block. This price is passed into the contract, and only if the price is higher than your target price you can spend the coins.
+
+This involves some degree of trust in the price oracle, but since the oracle produces price data for everyone to use, their incentive to attack your smart contract is minimised. To improve this situation, you can also choose to connect with multiple oracle providers so you do not have to trust a single party.
+
+pragma nexscript ^0.1.0;
+
+// A minimum block is provided to ensure that oracle price entries from before
+// this block are disregarded. i.e. when the NEXA price was $0.000001 in the past,
+// an oracle entry with the old block number and price can not be used.
+contract PriceVault(pubkey ownerPk, pubkey oraclePk, int minBlock, int priceTarget) {
+    function spend(sig ownerSig, datasig oracleSig, bytes oracleMessage) {
+        // Decode the message { blockHeight, price }
+        bytes4 blockHeightBin, bytes4 priceBin = oracleMessage.split(4);
+        int blockHeight = int(blockHeightBin);
+        int price = int(priceBin);
+
+
+        // Check that blockHeight is after minBlock
+        require(blockHeight >= minBlock);
+        // Check that blockHeight is not in the future
+        require(tx.time >= blockHeight);
+
+        // Check that current price is at least priceTarget
+        require(price >= priceTarget);
+
+        // Check that the price message was signed by the oracle
+        require(checkDataSig(oracleSig, oracleMessage, oraclePk));
+
+        // Check that the transaction was signed by the contract owner
+        require(checkSig(ownerSig, ownerPk));
+    }
+}
+
+
+Licho's Mecenas
+Donations are a great way to support the projects you love and periodic donations can incentivise continuous improvement to the product. But platforms like Patreon generally take fees of 10%+ and don't accept cryptocurrencies. Instead you can create a peer-to-peer smart contract that allows a recipient to withdraw a specific amount every month.
+
+The contract works by checking that a UTXO is at least 30 days old, after which it uses a covenant to enforce that the pledge amount is sent to the recipient, while the remainder is sent back to the contract itself. By sending it back the tx.age counter is effectively reset, meaning this process can only be repeated when another 30 days have past.
+
+Due to the nature of covenants we have to be very specific about the outputs (amounts and destinations) of the transaction. This also means that we have to account for the special case where the remaining contract balance is lower than the pledge amount, meaning no remainder should be sent back. Finally we have to account for a small fee that has to be taken from the contract's balance to pay the miners.
+
+contract Mecenas(bytes20 recipient, bytes20 funder, int pledge, int period) {
+    function receive() {
+        require(tx.age >= period);
+
+        // Check that the first output sends to the recipient
+        bytes25 recipientLockingBytecode = new LockingBytecodeP2PKT(recipient);
+        require(tx.outputs[0].lockingBytecode == recipientLockingBytecode);
+
+        // Calculate the value that's left
+        int minerFee = 1000;
+        int currentValue = tx.inputs[this.activeInputIndex].value;
+        int changeValue = currentValue - pledge - minerFee;
+
+        // If there is not enough left for *another* pledge after this one,
+        // we send the remainder to the recipient. Otherwise we send the
+        // remainder to the recipient and the change back to the contract
+        if (changeValue <= pledge + minerFee) {
+            require(tx.outputs[0].value == currentValue - minerFee);
+        } else {
+            require(tx.outputs[0].value == pledge);
+            bytes changeBytecode = tx.inputs[this.activeInputIndex].lockingBytecode;
+            require(tx.outputs[1].lockingBytecode == changeBytecode);
+            require(tx.outputs[1].value == changeValue);
+        }
+    }
+
+    function reclaim(pubkey pk, sig s) {
+        require(hash160(pk) == funder);
+        require(checkSig(s, pk));
+    }
+}
+
+Contract Instantiation
+Before interacting with smart contracts on the Nexa network, the NexScript SDK needs to instantiate a Contract object. This is done by providing the contract's information and constructor arguments. After this instantiation, the NexScript SDK can interact with Nexa contracts.
+
+Contract class
+The Contract class is used to represent a NexScript contract in a JavaScript object. These objects can be used to retrieve information such as the contract's address and balance. They can be used to interact with the contract by calling the contract's functions.
+
+Constructor
+new Contract(
+  artifact: Artifact,
+  constructorArgs: Argument[],
+  provider?: NetworkProvider,
+)
+
+A NexScript contract can be instantiated by providing an Artifact object, a list of constructor arguments, and optionally a NetworkProvider.
+
+An Artifact object is the result of compiling a NexScript contract. See the Language Documentation for more information on Artifacts. Compilation can be done using the standalone nexc CLI or programmatically with the nexc NPM package (see NexScript Compiler).
+
+A NetworkProvider is used to manage network operations for the NexScript contract. By default, a mainnet ElectrumNetworkProvider is used, but alternative network providers can be used. See the section on NetworkProvider below.
+
+Example
+import { Contract, ElectrumNetworkProvider } from '@nexscript/nexscript';
+import { compileFile } from 'nexc';
+
+// Import the artifact JSON
+import P2PKH from './p2pkh.json';
+
+// Or compile a contract file
+const P2PKH = compileFile(new URL('p2pkh.nex', import.meta.url));
+
+const provider = new ElectrumNetworkProvider('testnet4');
+const contract = new Contract(P2PKH, [alicePkh], { provider });
+
+address
+contract.address: string
+
+A contract's address can be retrieved through the address member field.
+
+Example
+console.log(contract.address)
+
+opcount
+contract.opcount: number
+
+The number of opcodes in the contract's bytecode can be retrieved through the opcount member field. This is useful to ensure that the contract is not too big, since Nexa smart contracts can contain a maximum of 201 opcodes.
+
+Example
+assert(contract.opcount <= 201)
+
+bytesize
+contract.bytesize: number
+
+The size of the contract's bytecode in bytes can be retrieved through the bytesize member field. This is useful to ensure that the contract is not too big, since Nexa smart contracts can be 10,000 bytes at most.
+
+Example
+console.log(contract.bytesize)
+
+bytecode
+contract.bytecode: string
+
+Returns the contract's redeem script encoded as a hex string.
+
+Example
+console.log(contract.bytecode)
+
+getBalance()
+async contract.getBalance(): Promise<bigint>
+
+Returns the total balance of the contract in satoshis. Both confirmed and unconfirmed balance is included in this figure.
+
+Example
+const contractBalance = await contract.getBalance()
+
+getUtxos()
+async contract.getUtxos(): Promise<Utxo[]>
+
+Returns all UTXOs that can be spent by the contract. Both confirmed and unconfirmed UTXOs are included.
+
+interface Utxo {
+  txid: string;
+  vout: number;
+  satoshis: bigint;
+  token?: TokenDetails;
+}
+
+Example
+const utxos = await contract.getUtxos()
+
+Contract functions
+contract.functions.<functionName>(...args: Argument[]): Transaction
+
+The main way to use smart contracts once they have been instantiated is through the functions defined in the NexScript source code. These functions can be found by their name under functions member field of a contract object. To call these functions, the parameters need to match ones defined in the NexScript code.
+
+These contract functions return an incomplete Transaction object, which needs to be completed by providing outputs of the transaction. More information about sending transactions is found on the Sending Transactions page.
+
+Example
+import { alice } from './somewhere';
+
+const tx = await contract.functions
+  .transfer(new SignatureTemplate(alice))
+  .to('nexa:nqtsq5g537fcf6z85pgwk4my5e5ddmypa2sm47mkzavt6zky', 10000n)
+  .send()
+
+SignatureTemplate
+new SignatureTemplate(signer: Keypair | Uint8Array | string, hashtype?: HashType)
+
+You may notice the SignatureTemplate object in the example above. When a contract function has a sig parameter, it requires a cryptographic signature over the spending transaction. But to generate this signature, the transaction needs to be built first, which is not yet the case when a contract function is first called.
+
+So in the place of a signature, a SignatureTemplate can be passed, which will automatically generate the correct signature using the signer parameter. This signer can be any representation of a private key, including NexCore PrivateKey, WIF strings, or raw private key buffers. This ensures that any Nexa library can be used.
+
+Example
+const wif = 'L4vmKsStbQaCvaKPnCzdRArZgdAxTqVx8vjMGLW5nHtWdRguiRi1';
+const sig = new SignatureTemplate(wif, HashType.SIGHASH_ALL);
+
+NetworkProvider
+The NexScript SDK needs to connect to the Nexa network to perform certain operations, like retrieving the contract's balance, or sending transactions. All network functionality that the NexScript SDK needs is encapsulated in a network provider. This allows different network providers to be used and makes it easy to swap out dependencies.
+
+ElectrumNetworkProvider
+new ElectrumNetworkProvider(network?: Network, electrum?: ElectrumCluster)
+
+The ElectrumNetworkProvider uses electrum-cash to connect to the Nexa network. This is the recommended provider for most use cases and is used as the default when no other provider is provided. Both network and electrum parameters are optional, and they default to mainnet and a 2-of-3 ElectrumCluster with a number of reliable electrum servers.
+
+Example
+const provider = new ElectrumProvider('testnet');
+
+Custom NetworkProviders
+A big strength of the NetworkProvider setup is that it allows you to implement custom providers. So if new Nexa libraries are created in the future, it is simple to use them with NexScript. This also potentially enables the NexScript SDK to be used with other (partially) compatible networks, such as BTC or BCH.
+
+NetworkProvider interface
+interface NetworkProvider {
+  /**
+   * Variable indicating the network that this provider connects to.
+   */
+  network: Network;
+
+  /**
+   * Retrieve all UTXOs (confirmed and unconfirmed) for a given address.
+   * @param address The CashAddress for which we wish to retrieve UTXOs.
+   * @returns List of UTXOs spendable by the provided address.
+   */
+  getUtxos(address: string): Promise<Utxo[]>;
+
+  /**
+   * @returns The current block height.
+   */
+  getBlockHeight(): Promise<number>;
+
+  /**
+   * Retrieve the Hex transaction details for a given transaction ID.
+   * @param txid Hex transaction ID.
+   * @throws {Error} If the transaction does not exist
+   * @returns The full hex transaction for the provided transaction ID.
+   */
+  getRawTransaction(txid: string): Promise<string>;
+
+  /**
+   * Broadcast a raw hex transaction to the network.
+   * @param txHex The raw transaction hex to be broadcast.
+   * @throws {Error} If the transaction was not accepted by the network.
+   * @returns The transaction ID corresponding to the broadcast transaction.
+   */
+  sendRawTransaction(txHex: string): Promise<string>;
+}
+
+type Network = 'mainnet' | 'testnet3' | 'testnet4' | 'chipnet' | 'regtest';
+
+interface Utxo {
+  txid: string;
+  vout: number;
+  satoshis: bigint;
+  token?: TokenDetails;
+}
+
+export interface TokenDetails {
+  amount: bigint;
+  groupId: string;
+}
+
+NexScript Compiler
+Generally NexScript contracts are compiled to an Artifact JSON file using the CLI compiler. As an alternative to this, NexScript contracts can be compiled from within JavaScript apps using the nexc package. This package needs to be installed separately and exports two compilation functions.
+
+npm install @nexscript/nexc
+
+compileFile()
+compileFile(sourceFile: PathLike): Artifact
+
+Compiles a NexScript contract from a source file. This is the recommended compile method if you're using Node.js and you have a source file available.
+
+Example
+const P2PKH = compileFile(new URL('p2pkh.nex', import.meta.url));
+
+compileString()
+compileString(sourceCode: string): Artifact
+
+Compiles a NexScript contract from a source code string. This is the recommended compile method if you're building a webapp, because compileFile() only works from a Node.js context. This is also the recommended method if no source file is locally available (e.g. the source code is retrieved with a REST API).
+
+const baseUrl = 'https://raw.githubusercontent.com/Bitcoin-com/nexscript'
+const result = await fetch(`${baseUrl}/master/examples/p2pkh.nex`);
+const source = await result.text();
+
+const P2PKH = compileString(source);
+
+Simple Transaction Builder
+When calling a contract function on a Contract object, an incomplete Transaction object is returned. This transaction can be completed by providing a number of outputs using the to() or withOpReturn() functions. Other chained functions are included to set other transaction parameters.
+
+Most of the available transaction options are only useful in very specific use cases, but the functions to(), withOpReturn() and send() are commonly used. withHardcodedFee() is also commonly used with covenant contracts.
+
+Transaction options
+to()
+transaction.to(to: string, amount: bigint, token: TokenDetails): this
+transaction.to(outputs: Array<Recipient>): this
+
+The to() function allows you to add outputs to the transaction. Either a single pair to/amount pair can be provided, or a list of them. This function can be called any number of times, and the provided outputs will be added to the list of earlier added outputs. Tokens can be sent by providing a TokenDetails object as the third parameter, or including it in your array of outputs with the .token property.
+
+interface Recipient {
+  to: string;
+  amount: bigint;
+  token?: TokenDetails;
+}
+
+interface TokenDetails {
+  amount: bigint;
+  groupId: string;
+}
+
+note
+The NexScript SDK supports automatic UTXO selection for Nexa and fungible tokens. However, if you want to send Non-Fungible CashTokens, you will need to do manual UTXO selection using from().
+
+Also note, that the automatic UTXO selection does best effort not to burn tokens and an token authority UTXOs. If this is your desired behaviour make sure to explicitly configure transaction with from() and to() prepared in a way which would allow to burn them.
+
+Example
+.to('nexa:nqtsq5g537fcf6z85pgwk4my5e5ddmypa2sm47mkzavt6zky', 500000n)
+
+withOpReturn()
+transaction.withOpReturn(chunks: string[]): this
+
+The withOpReturn() function allows you to add OP_RETURN outputs to the transaction. The chunks parameter can include regular UTF-8 encoded strings, or hex strings prefixed with 0x. This function can be called any number of times, and the provided outputs will be added to the list of earlier added outputs.
+
+Example
+.withOpReturn(['0x6d02', 'Hello World!'])
+
+from()
+transaction.from(inputs: Utxo[]): this
+
+The from() function allows you to provide a hardcoded list of contract UTXOs to be used in the transaction. This overrides the regular UTXO selection performed by the NexScript SDK, so no further selection will be performed on the provided UTXOs. This function can be called any number of times, and the provided UTXOs will be added to the list of earlier added UTXOs.
+
+tip
+The built-in UTXO selection is generally sufficient. But there are specific use cases for which it makes sense to use a custom selection algorithm.
+
+Example
+.from(await instance.getUtxos())
+
+withFeePerByte()
+transaction.withFeePerByte(feePerByte: number): this
+
+The withFeePerByte() function allows you to specify the fee per per bytes for the transaction. By default the fee per bytes is set to 1.0 satoshis, which is nearly always enough to be included in the next block. So it's generally not necessary to change this.
+
+Example
+.withFeePerByte(2.3)
+
+withHardcodedFee()
+transaction.withHardcodedFee(hardcodedFee: bigint): this
+
+The withHardcodedFee() function allows you to specify a hardcoded fee to the transaction. By default the transaction fee is automatically calculated by the NexScript SDK, but there are certain use cases where the smart contract relies on a hardcoded fee.
+
+tip
+If you're not building a covenant contract, you probably do not need a hardcoded transaction fee.
+
+Example
+.withHardcodedFee(1000n)
+
+withMinChange()
+transaction.withMinChange(minChange: bigint): this
+
+The withMinChange() function allows you to set a threshold for including a change output. Any remaining amount under this threshold will be added to the transaction fee instead.
+
+tip
+This is generally only useful in specific covenant use cases.
+
+Example
+.withMinChange(1000n)
+
+withoutChange()
+transaction.withoutChange(): this
+
+The withoutChange() function allows you to disable the change output. The remaining amount will be added to the transaction fee instead. This is equivalent to withMinChange(Number.MAX_VALUE).
+
+caution
+Be sure to check that the remaining amount (sum of inputs - sum of outputs) is not too high. The difference will be added to the transaction fee and cannot be reclaimed.
+
+Example
+.withoutChange()
+
+withoutTokenChange()
+transaction.withoutTokenChange(): this
+
+The withoutTokenChange() function allows you to disable the change output for tokens.
+
+caution
+Be sure to check that the remaining amount (sum of inputs - sum of outputs) is not too high. The difference will be burned and cannot be reclaimed.
+
+withAge()
+transaction.withAge(age: number): this
+
+The withAge() function allows you to specify the minimum age of the transaction inputs. This is necessary if you want to to use the tx.age NexScript functionality, and the age parameter passed into this function will be the value of tx.age inside the smart contract. For more information, refer to BIP68.
+
+Example
+.withAge(10)
+
+withTime()
+transaction.withTime(time: number): this
+
+The withTime() function allows you to specify the minimum block number that the transaction can be included in. The time parameter will be the value of tx.time inside the smart contract.
+
+tip
+By default, the transaction's time variable is set to the most recent block number, which is the most common use case. So you should only override this in specific use cases.
+
+Example
+.withTime(700000)
+
+Transaction building
+send()
+async transaction.send(): Promise<TransactionDetails>
+
+After completing a transaction, the send() function can be used to send the transaction to the Nexa network. An incomplete transaction cannot be sent.
+
+interface TransactionDetails {
+  inputs: Uint8Array[];
+  locktime: number;
+  outputs: Uint8Array[];
+  version: number;
+  txid: string;
+  hex: string;
+}
+
+Example
+import { alice } from './somewhere';
+
+const txDetails = await instance.functions
+  .transfer(new SignatureTemplate(alice))
+  .withOpReturn(['0x6d02', 'Hello World!'])
+  .to('nexa:nqtsq5g537fcf6z85pgwk4my5e5ddmypa2sm47mkzavt6zky', 200000n)
+  .to('nexa:nqtsq5g5wtkt44pfqusjj3wulk2n2pd27lhpzg0m326kcnsj', 100000n)
+  .withHardcodedFee(1000n)
+  .send()
+
+build()
+async transaction.build(): Promise<string>
+
+After completing a transaction, the build() function can be used to build the entire transaction and return the signed transaction hex string. This can then be imported into other libraries or applications as necessary.
+
+Example
+const txHex = await instance.functions
+  .transfer(new SignatureTemplate(alice))
+  .to('nexa:nqtsq5g537fcf6z85pgwk4my5e5ddmypa2sm47mkzavt6zky', 500000n)
+  .withAge(10)
+  .withFeePerByte(10)
+  .build()
+
+Transaction errors
+Transactions can fail for a number of reasons. Most of these are related to the execution of the smart contract (e.g. wrong parameters or a bug in the contract code). But errors can also occur because of other reasons (e.g. a fee that's too low or the same transaction already exists in the mempool). To facilitate error handling in your applications, the NexScript SDK provides an enum of different reasons for a failure.
+
+This Reason enum only includes errors that are related to smart contract execution, so other reasons have to be caught separately. Besides the Reason enum, there are also several error classes that can be caught and acted on:
+
+FailedRequireError, signifies a failed require statement. This includes the following reasons:
+Reason.EVAL_FALSE
+Reason.VERIFY
+Reason.EQUALVERIFY
+Reason.CHECKMULTISIGVERIFY
+Reason.CHECKSIGVERIFY
+Reason.CHECKDATASIGVERIFY
+Reason.NUMEQUALVERIFY
+FailedTimeCheckError, signifies a failed time check using tx.time or tx.age. This includes the following reasons:
+Reason.NEGATIVE_LOCKTIME
+Reason.UNSATISFIED_LOCKTIME
+FailedSigCHeckError, signifies a failed signature check. This includes the following reasons:
+Reason.SIG_COUNT
+Reason.PUBKEY_COUNT
+Reason.SIG_HASHTYPE
+Reason.SIG_DER
+Reason.SIG_HIGH_S
+Reason.SIG_NULLFAIL
+Reason.SIG_BADLENGTH
+Reason.SIG_NONSCHNORR
+FailedTransactionError, signifies a general fallback error. This includes all remaining reasons listed in the Reason enum as well as any other reasons unrelated to the smart contract execution.
+enum Reason {
+  EVAL_FALSE = 'Script evaluated without error but finished with a false/empty top stack element',
+  VERIFY = 'Script failed an OP_VERIFY operation',
+  EQUALVERIFY = 'Script failed an OP_EQUALVERIFY operation',
+  CHECKMULTISIGVERIFY = 'Script failed an OP_CHECKMULTISIGVERIFY operation',
+  CHECKSIGVERIFY = 'Script failed an OP_CHECKSIGVERIFY operation',
+  CHECKDATASIGVERIFY = 'Script failed an OP_CHECKDATASIGVERIFY operation',
+  NUMEQUALVERIFY = 'Script failed an OP_NUMEQUALVERIFY operation',
+  SCRIPT_SIZE = 'Script is too big',
+  PUSH_SIZE = 'Push value size limit exceeded',
+  OP_COUNT = 'Operation limit exceeded',
+  STACK_SIZE = 'Stack size limit exceeded',
+  SIG_COUNT = 'Signature count negative or greater than pubkey count',
+  PUBKEY_COUNT = 'Pubkey count negative or limit exceeded',
+  INVALID_OPERAND_SIZE = 'Invalid operand size',
+  INVALID_NUMBER_RANGE = 'Given operand is not a number within the valid range',
+  IMPOSSIBLE_ENCODING = 'The requested encoding is impossible to satisfy',
+  INVALID_SPLIT_RANGE = 'Invalid OP_SPLIT range',
+  INVALID_BIT_COUNT = 'Invalid number of bit set in OP_CHECKMULTISIG',
+  BAD_OPCODE = 'Opcode missing or not understood',
+  DISABLED_OPCODE = 'Attempted to use a disabled opcode',
+  INVALID_STACK_OPERATION = 'Operation not valid with the current stack size',
+  INVALID_ALTSTACK_OPERATION = 'Operation not valid with the current altstack size',
+  OP_RETURN = 'OP_RETURN was encountered',
+  UNBALANCED_CONDITIONAL = 'Invalid OP_IF construction',
+  DIV_BY_ZERO = 'Division by zero error',
+  MOD_BY_ZERO = 'Modulo by zero error',
+  INVALID_BITFIELD_SIZE = 'Bitfield of unexpected size error',
+  INVALID_BIT_RANGE = 'Bitfield\'s bit out of the expected range',
+  NEGATIVE_LOCKTIME = 'Negative locktime',
+  UNSATISFIED_LOCKTIME = 'Locktime requirement not satisfied',
+  SIG_HASHTYPE = 'Signature hash type missing or not understood',
+  SIG_DER = 'Non-canonical DER signature',
+  MINIMALDATA = 'Data push larger than necessary',
+  SIG_PUSHONLY = 'Only push operators allowed in signature scripts',
+  SIG_HIGH_S = 'Non-canonical signature: S value is unnecessarily high',
+  MINIMALIF = 'OP_IF/NOTIF argument must be minimal',
+  SIG_NULLFAIL = 'Signature must be zero for failed CHECK(MULTI)SIG operation',
+  SIG_BADLENGTH = 'Signature cannot be 65 bytes in CHECKMULTISIG',
+  SIG_NONSCHNORR = 'Only Schnorr signatures allowed in this operation',
+  DISCOURAGE_UPGRADABLE_NOPS = 'NOPx reserved for soft-fork upgrades',
+  PUBKEYTYPE = 'Public key is neither compressed or uncompressed',
+  CLEANSTACK = 'Script did not clean its stack',
+  NONCOMPRESSED_PUBKEY = 'Using non-compressed public key',
+  ILLEGAL_FORKID = 'Illegal use of SIGHASH_FORKID',
+  MUST_USE_FORKID = 'Signature must use SIGHASH_FORKID',
+  UNKNOWN = 'unknown error',
+}
+
+Advanced Transaction Builder
+With the introduction of newer smart contract features to Nexa, such as native introspection and GroupTokens, we've seen use cases for combining UTXOs of multiple different smart contracts within a single transaction - such as MAST Contracts. The simplified transaction builder only operates on a single smart contract, so to support more advanced use cases, you can use the Advanced Transaction Builder.
+
+The Advanced Transaction Builder supports adding UTXOs from any number of different smart contracts and P2PKT UTXOs. While the simplified transaction builder automatically selects UTXOs for you and adds change outputs, the advanced transaction builder requires you to provide the UTXOs yourself and manage change carefully.
+
+Instantiating a transaction builder
+new TransactionBuilder(options: TransactionBuilderOptions)
+
+To start, you need to instantiate a transaction builder and pass in a NetworkProvider instance.
+
+interface TransactionBuilderOptions {
+  provider: NetworkProvider;
+}
+
+Example
+import { ElectrumNetworkProvider, TransactionBuilder, Network } from 'nexscript';
+
+const provider = new ElectrumNetworkProvider(Network.MAINNET);
+const transactionBuilder = new TransactionBuilder({ provider });
+
+Transaction options
+addInput()
+transactionBuilder.addInput(utxo: Utxo, unlocker: Unlocker, options?: InputOptions): this
+
+
+Adds a single input UTXOs to the transaction that can be unlocked using the provided unlocker. The unlocker can be derived from a SignatureTemplate or a Contract instance's spending functions. The InputOptions object can be used to specify the sequence number of the input.
+
+note
+It is possible to create custom unlockers by implementing the Unlocker interface. Most use cases are covered by the SignatureTemplate and Contract classes.
+
+Example
+import { contract, aliceTemplate, aliceAdress, transactionBuilder } from './somewhere.js';
+
+const contractUtxos = await contract.getUtxos();
+const aliceUtxos = await provider.getUtxos(aliceAdress);
+
+transactionBuilder.addInput(contractUtxos[0], contract.unlock.spend());
+transactionBuilder.addInput(aliceUtxos[0], aliceTemplate.unlockP2PKT());
+
+
+addInputs()
+transactionBuilder.addInputs(utxos: Utxo[], unlocker: Unlocker, options?: InputOptions): this
+transactionBuilder.addInputs(utxos: UnlockableUtxo[]): this
+
+
+interface UnlockableUtxo extends Utxo {
+  unlocker: Unlocker;
+  options?: InputOptions;
+}
+
+Adds a list of input UTXOs, either with a single shared unlocker or with individual unlockers for each UTXO. The InputOptions object can be used to specify the sequence number of the inputs.
+
+Example
+import { contract, aliceTemplate, aliceAdress, transactionBuilder } from './somewhere.js';
+
+const contractUtxos = await contract.getUtxos();
+const aliceUtxos = await provider.getUtxos(aliceAdress);
+
+// Use a single unlocker for all inputs you're adding at a time
+transactionBuilder.addInputs(contractUtxos, contract.unlock.spend());
+transactionBuilder.addInputs(aliceUtxos, aliceTemplate.unlockP2PKT());
+
+// Or combine the UTXOs with their unlockers in an array
+const unlockableUtxos = [
+  { ...contractUtxos[0], unlocker: contract.unlock.spend() },
+  { ...aliceUtxos[0], unlocker: aliceTemplate.unlockP2PKT() },
+];
+transactionBuilder.addInputs(unlockableUtxos);
+
+
+addOutput() & addOutputs()
+transactionBuilder.addOutput(output: Output): this
+transactionBuilder.addOutputs(outputs: Output[]): this
+
+Adds a single output or a list of outputs to the transaction.
+
+interface Output {
+  to: string | Uint8Array;
+  amount: bigint;
+  token?: TokenDetails;
+}
+
+interface TokenDetails {
+  amount: bigint;
+  groupId: string;
+}
+
+Example
+import { aliceAddress, bobAddress, transactionBuilder, tokenCategory } from './somewhere.js';
+
+transactionBuilder.addOutput({
+  to: aliceAddress,
+  amount: 100_000n,
+  token: {
+    amount: 1000n,
+    groupId: tokenId,
+  }
+});
+
+transactionBuilder.addOutputs([
+  { to: aliceAddress, amount: 50_000n }
+  { to: bobAddress, amount: 50_000n },
+]);
+
+
+addOpReturnOutput()
+transactionBuilder.addOpReturnOutput(chunks: string[]): this
+
+Adds an OP_RETURN output to the transaction with the provided data chunks in string format. If the string is 0x-prefixed, it is treated as a hex string, otherwise it is treated as a UTF-8 string.
+
+Example
+// Post "Hello World!" to memo.cash
+transactionBuilder.addOpReturnOutput(['0x6d02', 'Hello World!']);
+
+setLocktime()
+transactionBuilder.setLocktime(locktime: number): this
+
+Sets the locktime for the transaction to set a transaction-level absolute timelock (see Timelock documentation for more information). The locktime can be set to a specific block height or a unix timestamp.
+
+setMaxFee()
+transactionBuilder.setMaxFee(maxFee: bigint): this
+
+Sets a max fee for the transaction. Because the advanced transaction builder does not automatically add a change output, you can set a max fee as a safety measure to make sure you don't accidentally pay too much in fees. If the transaction fee exceeds the max fee, an error will be thrown when building the transaction.
+
+Example
+transactionBuilder.setMaxFee(1000n);
+
+Transaction building
+send()
+async transactionBuilder.send(): Promise<TransactionDetails>
+
+After completing a transaction, the send() function can be used to send the transaction to the BCH network. An incomplete transaction cannot be sent.
+
+interface TransactionDetails {
+  inputs: Uint8Array[];
+  locktime: number;
+  outputs: Uint8Array[];
+  version: number;
+  txid: string;
+  hex: string;
+}
+
+Example
+import { aliceTemplate, aliceAddress, bobAddress, contract, provider } from './somewhere.js';
+
+const contractUtxos = await contract.getUtxos();
+const aliceUtxos = await provider.getUtxos(aliceAddress);
+
+const txDetails = await new TransactionBuilder({ provider })
+  .addInput(contractUtxos[0], contract.unlock.spend(aliceTemplate, 1000n))
+  .addInput(aliceUtxos[0], aliceTemplate.unlockP2PKT())
+  .addOutput({ to: bobAddress, amount: 100_000n })
+  .addOpReturnOutput(['0x6d02', 'Hello World!'])
+  .setMaxFee(2000n)
+  .send()
+
+
+build()
+transactionBuilder.build(): string
+
+After completing a transaction, the build() function can be used to build the entire transaction and return the signed transaction hex string. This can then be imported into other libraries or applications as necessary.
+
+Example
+import { aliceTemplate, aliceAddress, bobAddress, contract, provider } from './somewhere.js';
+
+const contractUtxos = await contract.getUtxos();
+const aliceUtxos = await provider.getUtxos(aliceAddress);
+
+const txHex = new TransactionBuilder({ provider })
+  .addInput(contractUtxos[0], contract.unlock.spend(aliceTemplate, 1000n))
+  .addInput(aliceUtxos[0], aliceTemplate.unlockP2PKT())
+  .addOutput({ to: bobAddress, amount: 100_000n })
+  .addOpReturnOutput(['0x6d02', 'Hello World!'])
+  .setMaxFee(2000n)
+  .build()
+
+
+Examples
+An extensive collection of examples is available in the GitHub repository. Below we discuss a few of these examples in more details. These examples focus mainly on the use of the SDK, while the Examples page in the language section focuses more on the NexScript syntax.
+
+Transfer With Timeout
+The idea of this smart contract is explained on the Language Examples page. The gist is that it allows you to send an amount of NEXA to someone, but if they don't claim the sent amount, it can be recovered by the sender.
+
+TransferWithTimeout.cash
+contract TransferWithTimeout(pubkey sender, pubkey recipient, int timeout) {
+    function transfer(sig recipientSig) {
+        require(checkSig(recipientSig, recipient));
+    }
+
+    function timeout(sig senderSig) {
+        require(checkSig(senderSig, sender));
+        require(tx.time >= timeout);
+    }
+}
+
+Now to put this smart contract in use in a JavaScript application we have to use the NexScript SDK in combination with a Nexa library such as NexCore. This library is used to generate public/private keys for the contract participants. Then these keys can be used in the NexScript SDK. The key generation code is left out of this example.
+
+TransferWithTimeout.js
+import { Contract, SignatureTemplate } from '@nexscript/nexscript';
+import { alicePriv, alicePub, bobPriv, bobPub } from './somewhere.js';
+import artifact from './transfer_with_timeout.json';
+
+// Instantiate a new contract using the artifact and constructor arguments:
+// { sender: alicePub, recipient: bobPub, timeout: 1000000 }
+// No network provider is provided, so the default ElectrumNetworkProvider is used
+const contract = new Contract(artifact, [alicePub, bobPub, 1000000n]);
+
+// Display contract address and balance
+console.log('contract address:', contract.address);
+console.log('contract balance:', await contract.getBalance());
+
+// Call the transfer function with Bob's signature
+// i.e. Bob claims the money that Alice has sent him
+const txDetails = await contract.functions
+  .transfer(new SignatureTemplate(bobPriv))
+  .to('nexa:nqtsq5g537fcf6z85pgwk4my5e5ddmypa2sm47mkzavt6zky', 10000n)
+  .send();
+console.log(txDetails);
+
+// Call the timeout function with Alice's signature
+// i.e. Alice recovers the money that Bob has not claimed
+// But because the timeout has not passed yet, the function fails and
+// we call the meep function so the transaction can be debugged instead
+const meepStr = await contract.functions
+  .timeout(new SignatureTemplate(alicePriv))
+  .to('nexa:nqtsq5g5wtkt44pfqusjj3wulk2n2pd27lhpzg0m326kcnsj', 10000n)
+  .meep();
+console.log(meepStr);
+
+MAST Contract Paths
+MAST Contract Paths is a powerful concept utilizing OP_EXEC which allows to pack a lot of user logic into seemingly small contract. In fact the MCP's template body is an engine to verify Merkle proof that a subscript belongs to a greater subset of contract routines belonging together. MCP concept also allows the subscript routines to be not revealed to the outer world until they are executed first time, allowing for greater security. The subscripts represent Merklized Abstract Syntax Tree (MAST) concept. At current consensus rules an MCP contract could contain up to 524288 (2^19) subscripts which are also subject to consensus rules (see nexa spec).
+
+Contract syntax
+MCP contracts have a distinct syntax and a set of rules to follow, see example:
+
+MCP.nex
+pragma nexscript ^0.7.0;
+
+contract Test(int visible unused a, int visible b, int c) {
+
+  contract A(int visible unused a, int visible unused b, int c) {
+    function funcA(string x, int y) {
+        require(c == 3);
+
+        require(x == "A");
+        require(y == 1);
+    }
+
+    function funcB(int z) {
+      require(z == 0);
+    }
+  }
+
+  contract B(int a, int b, int c) {
+    function funcA(string x, int y) {
+        require(a == 1);
+        require(b == 2);
+        require(c == 3);
+
+        require(x == "B");
+        require(y == 1);
+    }
+  }
+}
+
+Note, how an MCP contract, unlike conventional ones, has child contracts and defines two MAST contracts A and B.
+
+Each MAST contract have to declare the same contract parameters which MCP contract declares, in the same order, otherwise they will become unspendable. These can be marked to be ignored by using visible unused keywords, however.
+
+Note that (because of implementation details) unlike conventional contracts, MAST contract have to declare unused parameters first, not last:
+
+contract A(int visible unused a, int b)…
+
+instead of the required ordering for normal contracts:
+
+contract A(int a, int visible unused b)…
+
+Instantiation in SDK
+MCP artifacts are a bit different from conventional ones and include the artifacts of all MAST contracts compiled. To create an artifact object you'd need to compile the MCP contract source code with the following snippet to compile from string:
+
+import { compileString } from '@nexscript/nexc';
+const mcpArtifact = compileString(source);
+
+or to compile from file:
+
+import { compileFile } from '@nexscript/nexc';
+const mcpArtifact = compileFile(path);
+
+Then having an artifact, you can instantiate an MCP contract object:
+
+import {
+  ElectrumNetworkProvider,
+  McpContract,
+} from '@nexscript/nexscript';
+
+const provider = new ElectrumNetworkProvider();
+const mcp = new McpContract(mcpArtifact, [1n, 2n, 3n], { provider });
+
+// send some satoshis to contract address in order to "deploy" it on chain
+// await fund(mcp.address, 10000);
+
+await mcp.execute({
+  contractName: 'A',
+  functionName: 'funcA',
+  parameters: ['A', 1n],
+}).to(aliceAddress, 1000n).withoutChange().send();
+
+Implementation details
+MCP contract template
+Satisfier Args in main stack = subscript (SS), MP, A, CD, EFGH, IJKLMNOP, SS_ARGS*, DUMMY
+
+Constraint Args in altstack = C_ARGS
+
+SS_ARGS* being SS_ARG_N, …, SS_ARG_1, FunctionIndex?, C_ARG_N, …, C_ARG_1 (inversed order)
+
+C_ARGS being C_ARG_N, …, C_ARG_1 (inversed order)
+
+Note, that satisfier args contain the same copy of constraint args. And constraint args in the altstack are effectively ignored, not used in the template body
+
+Main Script in IDE
+
+Loop script in IDE
+
+SS, MP, A, CD, EFGH, IJKLMNOP, SS_ARGS, DUMMY || C_ARGS
+
+OP_DUP = Duplicates the subscript.
+
+SS, SS, MP, A, CD, EFGH, IJKLMNOP, SS_ARGS, DUMMY || C_ARGS
+
+OP_TOALTSTACK = Move the subscript to the altstack ready for execution later.
+
+SS, MP, A, CD, EFGH, IJKLMNOP, SS_ARGS, DUMMY || SS, C_ARGS
+
+OP_HASH160 = Generates the leaf hash of the script.
+
+H(SS), MP, A, CD, EFGH, IJKLMNOP, SS_ARGS, DUMMY || SS, C_ARGS
+
+OP_TOALTSTACK = Move the hash to altstack to prepare op_exec params.
+
+MP, A, CD, EFGH, IJKLMNOP, SS_ARGS, DUMMY || H(SS), SS, C_ARGS
+
+OP_PUSHDATA <LOOP_BYTECODE>
+
+LOOP_BYTECODE, MP, A, CD, EFGH, IJKLMNOP, SS_ARGS, DUMMY || H(SS), SS, C_ARGS
+
+OP_SWAP = move LOOP_BYTECODE behind MP.
+
+MP, LOOP_BYTECODE, A, CD, EFGH, IJKLMNOP, SS_ARGS, DUMMY || H(SS), SS, C_ARGS
+
+OP_ROT = rotate a to the top of the stack
+
+A, MP, LOOP_BYTECODE, CD, EFGH, IJKLMNOP, SS_ARGS, DUMMY || H(SS), SS, C_ARGS
+
+OP_FROMALTSTACK = Get H(SS) back from alt stack. we now have proper (inversed) order of arguments for OP_EXEC
+
+H(SS), A, MP, LOOP_BYTECODE, CD, EFGH, IJKLMNOP, SS_ARGS, DUMMY || SS, C_ARGS
+
+OP_3 = Add exec M_Params value of 3.
+
+3, H(SS), A, MP, LOOP_BYTECODE, CD, EFGH, IJKLMNOP, SS_ARGS, DUMMY || SS, C_ARGS
+
+OP_3 = Add exec M_Returns value of 3.
+
+3, 3, H(SS), A, MP, LOOP_BYTECODE, CD, EFGH, IJKLMNOP, SS_ARGS, DUMMY || SS, C_ARGS
+
+OP_EXEC - execute the repeated part, note the produced stack in the loop context
+
+----- Start of repeated section ------
+
+MP, A, H(SS) ||
+
+OP_DUP OP_TOALTSTACK = duplicate the merkle path and stash its copy to altstack
+
+MP, A, H(SS) || MP
+
+OP_2 OP_MOD = Gets the remainder of the merkle_path divided by 2.
+
+0, A, H(SS) || MP
+
+OP_NOTIF OP_SWAP OP_ENDIF = if remainder is 1, swap A and H(SS), otherwise do nothing
+
+A, H(SS) || MP
+
+OP_CAT = Concatenate subscript hash and first Merkle proof hash.
+
+AH(SS) || MP
+
+OP_HASH160 = Hash the concatenated subscript hash and the first merkle proof hash.
+
+AB || MP
+
+OP_ACTIVEBYTECODE = Get the LOOP_BYTECODE
+
+LOOP_BYTECODE, AB || MP
+
+OP_SWAP = swap bytecode with merkle branch
+
+AB, LOOP_BYTECODE || MP
+
+OP_FROMALTSTACK = get back merkle path from alt stack
+
+MP, AB, LOOP_BYTECODE ||
+
+OP_2 OP_DIV = divide merkle path by two (substitute for OP_RSHIFT, which only works with BIGNUMs)
+
+MP’, AB, LOOP_BYTECODE ||
+
+OP_SWAP = swap MP` with AB to prepare the next OP_EXEC argument order (inversed)
+
+AB, MP’, LOOP_BYTECODE ||
+
+----- End of repeated section ------
+
+AB, MP’, LOOP_BYTECODE, CD, EFGH, IJKLMNOP, SS_ARGS, DUMMY || SS
+
+OP_3 OP_ROLL = move CD to the top of the stack
+
+CD, AB, MP’, LOOP_BYTECODE, EFGH, IJKLMNOP, SS_ARGS, DUMMY || SS
+
+OP_3 OP_3 = Add exec M_Params value of 3, Add exec M_Returns value of 3.
+
+3, 3, CD, AB, MP’, LOOP_BYTECODE, EFGH, IJKLMNOP, SS_ARGS, DUMMY || SS
+
+// same as above
+
+OP_EXEC
+
+OP_3 OP_ROLL OP_3 OP_3
+
+3, 3, EFGH, ABCD, MP’, LOOP_BYTECODE, IJKLMNOP, SS_ARGS, DUMMY || SS, C_ARGS
+
+// same as above
+
+OP_EXEC
+
+OP_3 OP_ROLL OP_3 OP_3
+
+3, 3, IJKLMNOP, ABCDEFGH, MP’, LOOP_BYTECODE, SS_ARGS, DUMMY || SS, C_ARGS
+
+// last exec
+
+OP_EXEC
+
+ABCDEFGHIJKLMNOP, MP’, LOOP_BYTECODE, SS_ARGS, DUMMY || SS, C_ARGS
+
+OP_NIP OP_NIP = remove MP’ and LOOP_BYTECODE from the stack
+
+ABCDEFGHIJKLMNOP, SS_ARGS, DUMMY || SS, C_ARGS
+
+OP_PUSH20 = Push the predefined subscript hash to the stack.
+
+<0x...> = ABCDEFGHIJKLMNOP i.e. the Merkle root hash.
+
+<0x...>, ABCDEFGHIJKLMNOP, SS_ARGS, DUMMY || SS, C_ARGS
+
+OP_EQUALVERIFY = Check if the generated Merkle root matches the defined Merkle root.
+
+SS_ARGS, DUMMY || SS, C_ARGS
+
+OP_FROMALTSTACK = Get subscript from altstack.
+
+SS, SS_ARGS, DUMMY || C_ARGS
+
+OP_1NEGATE = Push -1 to stack
+
+<-1>, SS, SS_ARGS, DUMMY || C_ARGS
+
+OP_PLACE = place SS at DUMMY
+
+SS, SS_ARGS, SS || C_ARGS
+
+OP_DROP = Drop SS from top of the stack
+
+SS_ARGS, SS || C_ARGS
+
+OP_DEPTH = get stack depth (N_Params + 1)
+
+<N_Params+1>, SS_ARGS, SS || C_ARGS
+
+OP_1SUB = get true N_Params value
+
+<N_Params>, SS_ARGS, SS || C_ARGS
+
+OP_0 = Add exec M_Returns value of 0.
+
+<0>, <N_Params>, SS_ARGS, SS || C_ARGS
+
+OP_EXEC = Execute subscript.
+
+Example
+
+<0>, <N_Params>, SS_ARG_3, SS_ARG_2, SS_ARG_1, FunctionIndex, C_ARG_3, C_ARG_2, C_ARG_1, SS || C_ARGS
+
+if evaluated left to right, they are “pushed” in their appearance order to SS stack
+
+Produced stack in SS: C_ARG_1, C_ARG_2, C_ARG_3, FunctionIndex, SS_ARG_1, SS_ARG_2, SS_ARG_3
+
+which is correct ordering - (C_ARGS, SS_ARGS needed, low to high)
+
+Because of this pre-formed stack layout, unused arguments should be dropped first.
+
+I.e., this means that a mast contract using “visible unused” constraints should be declared like following: contract A(int visible unused a, int b)…
+
+instead of the required ordering for normal contracts:
+
+contract A(int a, int visible unused b)…
+
+
+Multiplex Contracts
+Multiplex contracts are collections of contracts with complex relationships. Members of multiplex contract collection can reference other contracts and inspect their properties, such as: template bytecode, templateHash, constraintHash, visibleParams and lockingBytecode (all accessors are of type bytes).
+
+Contract syntax
+Multiplex contracts enable a new feature to define several contracts within a single source file:
+
+Multiplex.nex
+pragma nexscript ^0.7.0;
+
+contract A() {
+  function A(string vA, int x) {
+    bytes lockingBytecode = B.lockingBytecode;
+    require(lockingBytecode.length != 0);
+
+    require(vA == "A");
+    require(x == 1);
+  }
+
+  function B(string vA, int x) {
+    require(vA == "B");
+    require(x == 2);
+  }
+}
+
+contract B() {
+  function Bv(string vB) {
+    require(vB == "B");
+  }
+}
+
+contract C() {
+  function Cv(string vC) {
+    bytes20 hash = A.templateHash;
+    require(hash.length != 0);
+    require(vC == "C");
+  }
+}
+
+Note, how contracts A and C reference other contract's pseudo-properties - so called accessors.
+
+tip
+Contract names must be unique
+There must be no circular dependencies in multiplex contracts
+Multiplex contracts allow interactions with MCP contracts. Let us reuse the previous contract and add an MCP contract to it.
+
+McpMultiplex.nex
+pragma nexscript ^0.7.0;
+
+contract A() {
+  ...
+}
+
+contract B() {
+  ...
+}
+
+contract C() {
+  ...
+}
+
+// Define an MCP contract
+contract MCP() {
+
+  contract MastA() {
+    function constraint(string vA, int x) {
+      require(vA == "A");
+      require(x == 1);
+      require(tx.outputs[0].lockingBytecode = A.lockingBytecode);
+    }
+  }
+
+  contract MastB() {
+    function constraint() {
+      require(tx.outputs[0].lockingBytecode = B.lockingBytecode);
+    }
+  }
+}
+
+contract McpCovenant() {
+  function covenantConstraint() {
+    require(tx.outputs[0].lockingBytecode = MCP.lockingBytecode);
+  }
+}
+
+Note, how we can reference contracts A and B from within MAST contracts. Also, a very powerful feature is that we support the accessors of the MCP contract itself (see McpCovenant contract).
+
+tip
+Also note, that if a top-level contract defines child contracts, it will be treated as an MCP contract and not as a convetional one.
+
+Instantiation in SDK
+From nexscript 0.7.0 multiplex contract artifacts are the standard one being output by the compiler.
+
+To compile your contract string, use:
+
+import { compileString } from '@nexscript/nexc';
+const artifact = compileString(source);
+
+or to compile from file:
+
+import { compileFile } from '@nexscript/nexc';
+const artifact = compileFile(path);
+
+Then having an artifact, you can instantiate a contract from the source:
+
+import {
+  ElectrumNetworkProvider,
+  Contract,
+} from '@nexscript/nexscript';
+
+const provider = new ElectrumNetworkProvider();
+const contract = new ContractContract(artifact, [], { provider, contractName: "B" });
+
+// send some satoshis to contract address in order to "deploy" it on chain
+// await fund(contract.address, 10000);
+
+await contract.Bv("B").to(aliceAddress, 1000n).send();
+
+
+Note, how we specify the top-level contract name which has to be initialized: contractName: "B". If we would omit it, the first contract will be initialized implicitly: A.
+
+Contract dependencies
+It is important to note, that at the compilation time, only contract's template and templateHash accessors are known. constraintHash, visibleParams and lockingBytecode are properties of an already existing (deployed) contracts. So to execute any function of contract A we would need to know the creation params of contract B, or to execute any function of contract C, we would need to know the creation params of both the contract A and contract B.
+
+Let us demonstrate the instantiation of contract C:
+
+import { compileString } from '@nexscript/nexc';
+const artifact = compileString(source);
+
+const contract = new Contract(artifact, ['C'], {
+  provider,
+  contractName: 'C',
+  dependencyArgs: {
+    A: {
+      constructorInputs: artifact.contracts[0].constructorInputs,
+      constructorArgs: ['A', 1n],
+    },
+    B: {
+      constraintHash: Uint8Array.from([0x00]),
+      visibleArgs: Uint8Array.from([]),
+      lockingBytecode: Uint8Array.from([]),
+    },
+  },
+});
+
+Note, how we have two options to specify the contract creation params:
+
+for contract A we use constructorInputs known from the artifact and constructor args are the same as we would have passed to contract A instantiation.
+for Contract B we use another notation - full specification of the properties of an already deployed contract: constraintHash, visibleArgs, lockingBytecode.
+And because the full specification of the properties of an already deployed contract (constraintHash, visibleArgs, lockingBytecode) is exactly the contract's address, there is a better way around for specifying the dependency params for B: using a utility function getContractCreationParamsFromAddress.
+
+  dependencyArgs: {
+    ...
+    B: getContractCreationParamsFromAddress("nexa:nqt...."),
+  },
+
+
+
+Script Templates
+In Nexa, coins are held in Script Templates which dictate the requirements for how those coins can be spent. Script Templates are a generalization of the Pay-To-Script-Hash (P2SH) concept on Bitcoin. Just like P2SH, Pay-To-Script-Template (P2ST) hashes the script code to present it in a concise way. A big advantage of using templates is that they can be standardized, these are called "Well-Known" Script Templates. The 1st well-known Script Template, with script number 1, is Pay-To-Publickey-Template (P2PKT). Because of this standardization the template doesn't need to be provided but can just be replaced by the script number 1.
+
+P2PKT explained
+The most basic transaction is a Pay-To-Publickey-Template transaction, where only a private key corresponding to the public key can create a valid signature for the transaction. In Bitcoin the default transaction type is variation on this: Pay-To-PublickeyHash (P2PKH) so the public key itself is not revealed. In Nexa this explicit hashing of the public key is not necessary for privacy & security reasons because it happens behind the 'constraint hash'! This brings us to the second important concept after templates: constraints!
+
+Template & Constraint Script
+The template of paying to a public key is standardized, but the constraint is unique to each public key used in a P2PKT transaction. This "Constraint Script" is the part that specifies data to be used in a template that is specific to the entity who creates the address. Most commonly this would be a public key, but it can be any data. Similar to the Template Script, the Constraint Script is also hashed when making a transaction, this means that only the hash of the public key push script is visible and not the public key itself!
+
+Recreating P2PKT
+For learning purposes, we'll recreate P2PKT by just using the Pay-To-Script-Template without the well-known standardization. A NexScript implementation for it would look the following:
+
+ExampleContract.nex
+pragma nexscript ^0.1.0;
+
+contract P2PKT(pubkey recipient) {
+    // Allow the recipient to claim their received money
+    function transfer(sig recipientSig) {
+        require(checkSig(recipientSig, recipient));
+    }
+}
+
+First, the version that is used for the Nexscript contract is declared. Next the contract keyword is used followed by the chosen name for the Nexscript contract, here we chose P2PKT. Next up we have the Nexscript parameters for the constraints which are added as the constraint script, as explained here is just a simple script pushing the public key. Then, between braces, there is the Nexscript code for the template script. A Nexscript contract consists of one or multiple functions, each with its own name (called transfer here). Each function has round brackets where it can accept function arguments which need to be provided when spending the from the contract, in the case of our P2PKT contract this is the recipientSig. Then, between braces again, there's the actual requirements imposed by the function, here it is simply that the provided signature matches the public key provided in the constraints.
+
+Advantages of Templates
+We saw that one of the advantages of templates was that popular templates like P2PKT could be efficiently standardized with a unique number. Using templates has other use cases: if a smart contract mutates and has a different Constraint Script or Visible Parameters, then the template will still remain the same only the constraintHash or visibleParameters will change. This is considered a more advanced usage of script but can easily be used through Nexscript with the expression LockingBytecodeP2ST:
+
+new LockingBytecodeP2ST(bytes20 templateHash, bytes constraintHash, bytes visibleParameters): bytes
+
+
+The LockingBytecodeP2ST expression takes 3 arguments, the templateHash, the constraintHash, and encoded visible contract parameters visibleParameters when mutating the state of a self-replicating contract for example, the template will remain the same and the state update will be hashed into the Constraint Script or be reflected in visible parameters. Visible parameters should already be encoded as script of push-only operations, minimally encoded. E.g. two params: number "1" and data blob "0xbeef" will be encoded as "5102beef". See nexcore-lib's Script class to build bitcoin scripts.
+
+An example of a local state contract is the "streaming Mecenas" contract in the covenant guide. The relevant part of the code is:
+
+    // Extract the template hash from the lockingbytecode
+    bytes templateHash = hash160(this.activeBytecode);
+
+    // Create the new constraintScript
+    bytes newConstrainScript = 0x08 + bytes8(tx.locktime);
+    bytes20 constraintHash = hash160(newConstrainScript);
+
+    // Create the locking bytecode for the new contract and check that
+    // the change output sends to that contract
+    bytes newContractLock = new LockingBytecodeP2ST(templateHash, constraintHash, 0x);
+    require(tx.outputs[1].lockingBytecode == newContractLock);
+
+
+This setup has the advantage that the templateHash always remains the same so it's easy to see the money is sent to a different instance of the same contract. constructing the newConstrainScript can be more complex if you keep multiple arguments in the local state or if the arguments have a variable length.
+
+Some contracts on Nexa allow for empty constraint hash, e.g. in the case when a NexScript contract has no constructor parameters or when all constructor parameters are visible. To account for that the following syntax shall be used (note the use of 0x for constraint hash):
+
+new LockingBytecodeP2ST(templateHash, 0x, 0x);
+
+If constraintHash is stored in a variable and is not the length of 20 bytes the contract will be created but it will be invalid. For the case of it being wrong-sized hex literal such as 0xbeef, the contract will fail to compile.
+
+When constructing constraintHash and visibleParameters the encodeNumber and encodeData can be useful for stateful contracts:
+
+contract statefulContract(bytes variable, int version, string visible message) {
+  function mutate() {
+    variable = variable + 0xbeef;
+    version = version + 1;
+    message = message + "hello"
+
+    // Extract the template hash from the lockingbytecode
+    bytes templateHash = hash160(encodeData(variable) + encodeNumber(version));
+
+    // Create the new constraintScript
+    bytes20 constraintHash = hash160(newConstrainScript);
+
+    // Create the new visibleArgs
+    bytes visibleArgs = encodeData(bytes(message));
+
+    // Create the locking bytecode for the new contract and check that
+    // the change output sends to that contract
+    bytes newContractLock = new LockingBytecodeP2ST(templateHash, constraintHash, visibleArgs);
+    require(tx.outputs[1].lockingBytecode == newContractLock);
+  }
+}
+
+Writing Covenants & Introspection
+Covenants are all the rage in Nexa smart contracts. But what are they, and how do you use them? In one sentence: a covenant is a constraint on how money can be spent. A simple example is creating a smart contract that may only send money to one specific address and nowhere else. The term Covenant originates in property law, where it is used to constrain the use of any object - or in the case of Nexa, the use of money.
+
+Bitcoin covenants were first proposed in a paper titled Bitcoin Covenants, but several other proposals have been created over the years. Nexa has implemented so-called Native Introspection which enables efficient and accessible covenants. This was extended with token introspection opcodes with the implementation of OP_PUSH_TX_STATE support.
+
+Accessible introspection data
+When using NexScript, you can access a lot of introspection data that can be used to inspect and constrain transaction details, such as inputs and outputs.
+
+int this.activeInputIndex - Index of the input that is currently under evaluation during transaction validation.
+bytes this.activeBytecode - Contract bytecode of the input that is currently under evaluation during transaction validation.
+int tx.version - Version of the transaction.
+int tx.locktime - nLocktime field of the transaction.
+int tx.inputs.length - Number of inputs in the transaction.
+int tx.inputs[i].value - Value of a specific input (in satoshis).
+bytes tx.inputs[i].lockingBytecode - Locking bytecode (scriptPubKey) of a specific input.
+bytes tx.inputs[i].unlockingBytecode - Unlocking bytecode (scriptSig) of a specific input.
+bytes32 tx.inputs[i].outpointTransactionHash - Outpoint transaction hash of a specific input.
+int tx.inputs[i].outpointIndex - Outpoint index of a specific input.
+int tx.inputs[i].sequenceNumber - nSequence number of a specific input.
+int tx.outputs.length - Number of outputs in the transaction.
+int tx.outputs[i].value - Value of a specific output (in satoshis).
+bytes tx.outputs[i].lockingBytecode - Locking bytecode (scriptPubKey) of a specific output.
+Using introspection data
+While we know the individual data fields, it's not immediately clear how this can be used to create useful smart contracts on Nexa. But there are several constraints that can be created using these fields, most important of which are constraints on the recipients of funds, so that is what we discuss.
+
+Restricting P2PKT recipients
+One interesting technique in Nexa is called blind escrow, meaning that funds are placed in an escrow contract. This contract can only release the funds to one of the escrow participants, and has no other control over the funds.
+
+contract Escrow(bytes20 arbiter, bytes20 buyer, bytes20 seller) {
+    function spend(pubkey pk, sig s) {
+        require(hash160(pk) == arbiter);
+        require(checkSig(s, pk));
+
+        // Check that the correct amount is sent
+        int minerFee = 1000; // hardcoded fee
+        int amount = tx.inputs[this.activeInputIndex].value - minerFee;
+        require(tx.outputs[0].value == amount);
+
+        // Check that the transaction sends to either the buyer or the seller
+        bytes25 buyerLock = new LockingBytecodeP2PKT(buyer);
+        bytes25 sellerLock = new LockingBytecodeP2PKT(seller);
+        bool sendsToBuyer = tx.outputs[0].lockingBytecode == buyerLock;
+        bool sendsToSeller = tx.outputs[0].lockingBytecode == sellerLock;
+        require(sendsToBuyer || sendsToSeller);
+    }
+}
+
+The contract starts by doing some checks to make sure the transaction is signed by the arbiter. Next up it checks that the full contract balance (tx.inputs[this.activeInputIndex].value) is sent to the first output by accessing tx.outputs[0].value. Finally it checks that the receiver of that money is either the buyer or the seller using LockingBytecodeP2PKT and tx.outputs[0].lockingBytecode. Note that we use a hardcoded fee as it is difficult to calculate the exact transaction fee inside the smart contract.
+
+Restricting P2ST recipients
+Besides sending money to P2PKT addresses, it is also possible to send money to a smart contract (P2ST) address. This can be used in the same way as a P2PKT address if the script hash is known beforehand, but this can also be used to make sure that money has to be sent back to the current smart contract.
+
+This is especially effective when used together with time constraints. An example is the Licho's Last Will contract. This contract puts a dead man's switch on the contract's holdings, and requires the owner to send a heartbeat to the contract every six months. If the contract hasn't received this heartbeat, an inheritor can claim the funds instead.
+
+contract LastWill(bytes20 inheritor, bytes20 cold, bytes20 hot) {
+    function inherit(pubkey pk, sig s) {
+        require(tx.age >= 180 days);
+        require(hash160(pk) == inheritor);
+        require(checkSig(s, pk));
+    }
+
+    function cold(pubkey pk, sig s) {
+        require(hash160(pk) == cold);
+        require(checkSig(s, pk));
+    }
+
+    function refresh(pubkey pk, sig s) {
+        require(hash160(pk) == hot);
+        require(checkSig(s, pk));
+
+        // Check that the correct amount is sent
+        int minerFee = 1000; // hardcoded fee
+        int amount = tx.inputs[this.activeInputIndex].value - minerFee;
+        require(tx.outputs[0].value == amount);
+
+        // Check that the funds are sent back to the contract
+        bytes23 contractLock = tx.inputs[this.activeInputIndex].lockingBytecode;
+        require(tx.outputs[0].lockingBytecode == contractLock);
+    }
+}
+
+This contract has three functions, but only the refresh() function uses a covenant. Again it performs necessary checks to verify that the transaction is signed by the owner, after which it checks that the entire contract balance is sent. It then uses tx.inputs[this.activeInputIndex].lockingBytecode to access its own locking bytecode, which can be used as the locking bytecode of this output. Sending the full value back to the same contract effectively resets the tx.age counter, so the owner of the contract needs to do this every 180 days.
+
+Restricting P2PKT and P2ST
+The earlier examples showed sending money to only a single output of either P2PKT or P2ST. But there nothing preventing us from writing a contract that can send to multiple outputs, including a combination of P2PKT and P2ST outputs. A good example is the Licho's Mecenas contract that allows you to set up recurring payments where the recipient is able to claim the same amount every month, while the remainder has to be sent back to the contract.
+
+contract Mecenas(bytes20 recipient, bytes20 funder, int pledge, int period) {
+    function receive() {
+        require(tx.age >= period);
+
+        // Check that the first output sends to the recipient
+        bytes25 recipientLockingBytecode = new LockingBytecodeP2PKT(recipient);
+        require(tx.outputs[0].lockingBytecode == recipientLockingBytecode);
+
+        // Calculate the value that's left
+        int minerFee = 1000;
+        int currentValue = tx.inputs[this.activeInputIndex].value;
+        int changeValue = currentValue - pledge - minerFee;
+
+        // If there is not enough left for *another* pledge after this one,
+        // we send the remainder to the recipient. Otherwise we send the
+        // pledge to the recipient and the change back to the contract
+        if (changeValue <= pledge + minerFees) {
+            require(tx.outputs[0].value == currentValue - minerFee);
+        } else {
+            require(tx.outputs[0].value == pledge);
+            bytes changeBytecode = tx.inputs[this.activeInputIndex].lockingBytecode;
+            require(tx.outputs[1].lockingBytecode == changeBytecode);
+            require(tx.outputs[1].value == changeValue);
+        }
+    }
+
+    function reclaim(pubkey pk, sig s) {
+        require(hash160(pk) == funder);
+        require(checkSig(s, pk));
+    }
+}
+
+
+This contract applies similar techniques as the previous two examples to verify the signature, although in this case it does not matter who the signer of the transaction is. Since the outputs are restricted with covenants, there is no way someone could call this function to send money anywhere but to the correct outputs.
+
+Local state
+Smart contracts which persist for multiple transactions might want to keep data for later use, this is called local state. With GroupTokens local state can be kept in the NFT data (rest bytes after 32 bytes long group Id) of the smart contract UTXO. Because the state is not kept in the script of the smart contract itself, the base contract address can remain the same unlike with the "simulated state" strategy where the P2ST locking bytecode of the new iteration of the contract was restricted to contain the updated state, which caused the address to change each time.
+
+To demonstrate this we consider the Mecenas contract again, and focus on a drawback of this contract: you have to claim the funds at exactly the right moment or you're leaving money on the table. Every time you claim money from the contract, the tx.age counter is reset, so the next claim is possible 30 days after the previous claim. So if we wait a few days to claim, these days are basically wasted.
+
+Besides these wasted days it can also be inconvenient to claim at set intervals, rather than the "streaming" model that the Ethereum project Sablier employs. Instead of set intervals, you should be able to claim funds at any time during the "money stream". Using local state, we can approach a similar system with Nexa.
+
+contract Mecenas(
+    bytes8 initialBlock,
+) {
+    function receive() {
+        // configure these constants
+        bytes20 constant recipient = 0x;
+        bytes20 constant funder = 0x;
+        int constant pledgePerBlock = 0;
+
+        // Check that the first output sends to the recipient
+        bytes23 recipientLockingBytecode = new LockingBytecodeP2PKT(recipient);
+        require(tx.outputs[0].lockingBytecode == recipientLockingBytecode);
+
+        // Check that time has passed and that time locks are enabled
+        int initial = int(initialBlock);
+        require(tx.time >= initial);
+
+        // Calculate the amount that has accrued since last claim
+        int passedBlocks = tx.locktime - initial;
+        int pledge = passedBlocks * pledgePerBlock;
+
+        // Calculate the leftover amount
+        int minerFee = 1000;
+        int currentValue = tx.inputs[this.activeInputIndex].value;
+        int changeValue = currentValue - pledge - minerFee;
+
+        // If there is not enough left for *another* block after this one,
+        // we send the remainder to the recipient. Otherwise we send the
+        // remainder to the recipient and the change back to the contract
+        if (changeValue <= pledgePerBlock + minerFee) {
+            require(tx.outputs[0].value == currentValue - minerFee);
+        } else {
+            // Check that the outputs send the correct amounts
+            require(tx.outputs[0].value == pledge);
+            require(tx.outputs[1].value == changeValue);
+
+            // Extract the template hash from the lockingbytecode
+            bytes templateHash = hash160(this.activeBytecode);
+
+            // Create the new constraintScript
+            bytes newConstrainScript = 0x08 + bytes8(tx.locktime);
+            bytes20 constraintHash = hash160(newConstrainScript);
+
+            // Create the locking bytecode for the new contract and check that
+            // the change output sends to that contract
+            bytes newContractLock = new LockingBytecodeP2ST(templateHash, constraintHash, 0x);
+            require(tx.outputs[1].lockingBytecode == newContractLock);
+        }
+    }
+
+    function reclaim(pubkey pk, sig s) {
+        require(hash160(pk) == funder);
+        require(checkSig(s, pk));
+    }
+}
+
+
+Instead of having a pledge per 30 day period, we define a pledge per block. At any point in time we can calculate how much money the recipient has earned. Then the covenant enforces that this amount is withdrawn from the contract. The remainder is sent to a new stream that starts at the end of of the previous one. The template script of the smart contract is reused but the new constraint script is constructed by the contract itself. This process can be applied to the new stream until the money in the stream runs out.
+
+Conclusion
+We have discussed the main uses for covenants as they exist on Nexa today. We've seen how we can achieve different use case by combining transaction output restrictions to P2ST and P2PKT outputs. We also touched on more advanced subjects such as mutating the local state through the constraints script. Covenants, script templates and Group tokens are the main differentiating factor for Nexa smart contracts when compared to BTC, while keeping the same efficient stateless verification.
+
+Merkle Tools
+Nexscript 1.0.0 introduces extended tools to interact with Merkle trees and validate item inclusion in a dataset in decentralized and permissionless fashion.
+
+Currently the merkleRoot macro is an emulation of a proposed OP_MERKLE opcode.
+
+Limitations
+merkleRoot macro beingh emulated comes with some limitations. The main one comes from the amount of opcodes needed for emulation, the larger (and deeper) the tree gets the more VM logic needs to be applied. The base cost for this macro is 12 opcodes, with additional 5 opcodes per each tree height. Tree height is Math.floor(Math.log2(nElements - 1) + 1). So for 1000 elements in the dataset, the resulting code would require 62 opcodes. It is advised to choose the max tree capacity before deploying contracts.
+
+Applications
+Merkle Database
+The idea behind the Merkle Database is to enable the contract users to propose the next state of a decentralized database in a permissionless and trustless fashion, while owners of the database can also update the elements in it knowing the exact contents of it.
+
+// lastElement index is dataset size - 1
+contract merkleDatabase(bytes20 root, int lastElementIndex) {
+  function append(bytes proof, bytes20 lastLeaf, bytes20 newLeaf) {
+
+    // VALIDATE the existence of chosen leaf.
+    bytes20 generatedRoot = merkleRoot(2, proof, lastElementIndex, lastLeaf ); // Generate a merkle root from the merkle proof.
+    require(generatedRoot == root); //Validate that the merkle proof is valid.
+
+    // APPEND the chosen leaf to the new leaf.
+    lastElementIndex = lastElementIndex + 1; // Increment the leaf index.
+    bytes20 generatedRootNew = merkleRoot(2, proof, lastElementIndex, newLeaf ); // Generate a merkle root for the new merkle leaf.
+
+    // Apply changes to child UTXO
+    bytes20 templateHash = hash160(this.activeBytecode); // Extract the template hash from the lockingbytecode
+    bytes20 constraintHash = hash160(encodeData(generatedRootNew) + encodeNumber(lastElementIndex)); // Create the new constraintScript with the new root and new lastElementIndex.
+    bytes newContractLock = new LockingBytecodeP2ST(templateHash, constraintHash, bytes(0x)); // Generate new locking byte code for the child UTXO.
+    require(tx.outputs[0].lockingBytecode == newContractLock); // Lock the locking script for the child UTXO.
+  }
+
+  function update(bytes proof, int leafIndex, bytes20 leaf, bytes20 newLeaf) {
+
+    // VALIDATE the existence of chosen leaf.
+    bytes20 generatedRoot = merkleRoot(2, proof, leafIndex, leaf ); // Generate a merkle root from the merkle proof.
+    require(generatedRoot == root); //Validate that the merkle proof is valid.
+
+    // UPDATE the chosen leaf to the new leaf.
+    bytes20 generatedRootNew = merkleRoot(2, proof, leafIndex, newLeaf ); // Generate a merkle root for the new merkle leaf.
+
+    // Apply changes to child UTXO
+    bytes20 templateHash = hash160(this.activeBytecode); // Extract the template hash from the lockingbytecode
+    bytes20 constraintHash = hash160(encodeData(generatedRootNew) + encodeNumber(lastElementIndex)); // Create the new constraintScript with the new root.
+    bytes newContractLock = new LockingBytecodeP2ST(templateHash, bytes(constraintHash), bytes(0x)); // Generate new locking byte code for the child UTXO.
+    require(tx.outputs[0].lockingBytecode == newContractLock); // Lock the locking script for the child UTXO.
+  }
+}
+
+
+See nexscript/test/e2e/Merkle.test.ts:342 for sample code to validate, update and extend contents of such database.
+
