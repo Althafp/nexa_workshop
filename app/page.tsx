@@ -6,7 +6,7 @@ export default function Page() {
   return (
     <main className="min-h-dvh">
       <Hero />
-      <section className="mx-auto w-full max-w-6xl px-4 py-12 md:py-16">
+      <section className="mx-auto w-full max-w-6xl px-4 py-8 md:py-12">
         <NexaBasics />
       </section>
       <Footer />

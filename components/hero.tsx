@@ -25,7 +25,7 @@ export function Hero() {
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-6xl px-4 pb-16 pt-10 md:pb-24 md:pt-16">
+      <div className="mx-auto w-full max-w-6xl px-4 pb-8 pt-10 md:pb-12 md:pt-16">
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
@@ -41,7 +41,7 @@ export function Hero() {
 
           <div className="mt-8 flex flex-wrap items-center gap-4">
             <Button asChild size="lg" className="rounded-2xl ring-2 ring-neon hover:ring-4 transition-all text-lg px-8 py-6">
-              <Link href="/workshop" className="inline-flex items-center gap-2">
+              <Link href="/workshop/transaction-dapp" className="inline-flex items-center gap-2">
                 <Rocket className="h-5 w-5" />
                 <span>Build Your Own DApp</span>
               </Link>
@@ -53,24 +53,9 @@ export function Hero() {
               className="rounded-2xl border-2 border-neon/50 hover:bg-neon hover:text-background transition-all text-lg px-8 py-6"
             >
               <Link href="/playground" className="inline-flex items-center gap-2">
-                <span>Open DemO DApp</span>
+                <span>Open Demo DApp</span>
               </Link>
             </Button>
-          </div>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.25, duration: 0.6 }}
-          className="pointer-events-none mt-10 h-24 w-full select-none overflow-hidden"
-          aria-hidden
-        >
-          <div className="h-px w-full bg-gradient-to-r from-transparent via-neon/50 to-transparent" />
-          <div className="mt-6 grid grid-cols-4 gap-4 opacity-60">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="h-8 rounded-md border border-border/50 bg-card" />
-            ))}
           </div>
         </motion.div>
       </div>
