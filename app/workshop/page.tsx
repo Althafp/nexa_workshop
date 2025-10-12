@@ -42,7 +42,7 @@ export default function WorkshopPage() {
           <Button asChild variant="outline">
             <Link href="/playground">
               <Code className="mr-2 h-4 w-4" />
-              Existing Dapp
+              Demo Dapp
             </Link>
           </Button>
         </div>
@@ -116,7 +116,7 @@ export default function WorkshopPage() {
             <Button asChild size="lg" variant="outline" className="border-neon text-neon hover:bg-neon hover:text-background">
               <Link href="/playground">
                 <Code className="mr-2 h-4 w-4" />
-                Open Existing Dapp
+                Open Demo Dapp
               </Link>
             </Button>
           </CardContent>

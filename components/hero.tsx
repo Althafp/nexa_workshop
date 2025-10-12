@@ -53,7 +53,7 @@ export function Hero() {
               className="rounded-2xl border-2 border-neon/50 hover:bg-neon hover:text-background transition-all text-lg px-8 py-6"
             >
               <Link href="/playground" className="inline-flex items-center gap-2">
-                <span>Open Existing DApp</span>
+                <span>Open DemO DApp</span>
               </Link>
             </Button>
           </div>
