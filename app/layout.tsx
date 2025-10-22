@@ -15,6 +15,11 @@ export const metadata: Metadata = {
   title: "Nexa Blockchain Workshop",
   description: "Build Your First Nexa DApp",
   generator: "v0.app",
+  icons: {
+    icon: "/nexa.jpg",
+    shortcut: "/nexa.jpg",
+    apple: "/nexa.jpg",
+  },
 }
 
 export default function RootLayout({

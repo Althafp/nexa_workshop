@@ -15,15 +15,15 @@ export default function TransactionDAppTutorial() {
         <div className="mx-auto max-w-5xl px-4 py-4 flex items-center justify-between">
           <Link 
             href="/workshop" 
-            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back to Workshop
+            Back to Workshops
           </Link>
-          <Button asChild size="sm">
+          <Button asChild size="sm" variant="outline">
             <Link href="/playground" className="flex items-center gap-2">
               <Play className="h-4 w-4" />
-              Test Working DApp
+              Demo DApp
             </Link>
           </Button>
         </div>

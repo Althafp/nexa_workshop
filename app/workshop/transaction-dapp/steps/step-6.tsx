@@ -61,24 +61,30 @@ export function TransactionSender({ wallet }: Props) {
       setError('')
       setTxid('')
 
-      if (!validateAddress(recipient)) {
+      // Validate address
+      const isValid = await validateAddress(recipient)
+      if (!isValid) {
         throw new Error('Invalid recipient address')
       }
 
-      const amountSatoshis = parseNexa(amount)
-      if (amountSatoshis < BigInt(1000)) {
+      // Parse amount to satoshis (returns string)
+      const amountStr = parseNexa(amount)
+      const amountNum = parseFloat(amountStr)
+      
+      if (amountNum < 1000) {
         throw new Error('Minimum: 10 NEXA')
       }
 
-      const txHash = await sendTransaction(
-        wallet.wallet,
-        wallet.account,
-        recipient,
-        amountSatoshis,
-        wallet.network
-      )
+      // Send transaction using new params object signature
+      const result = await sendTransaction({
+        wallet: wallet.wallet,
+        account: wallet.account,
+        toAddress: recipient,
+        amount: amountStr,
+        network: (wallet.network || 'testnet') as 'mainnet' | 'testnet',
+      })
 
-      setTxid(txHash)
+      setTxid(result.txid)
       setRecipient('')
       setAmount('')
     } catch (err: any) {

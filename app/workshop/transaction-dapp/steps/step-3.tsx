@@ -34,18 +34,15 @@ export function Step3Dependencies() {
           </p>
           
           <CodeBlock 
-            code="npm install @nexajs/wallet"
+            code="npm install nexa-wallet-sdk bip39"
             language="bash"
           />
 
           <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-4">
             <h4 className="font-semibold text-sm text-blue-600 mb-2">What this includes:</h4>
             <ul className="text-sm space-y-1 text-muted-foreground">
-              <li>✓ Full HD wallet support</li>
-              <li>✓ Rostrum network integration</li>
-              <li>✓ Transaction building & signing</li>
-              <li>✓ Address validation</li>
-              <li>✓ BIP39 for seed phrases (included)</li>
+              <li>✓ <strong>nexa-wallet-sdk</strong>: Full HD wallet support, Rostrum network, transactions</li>
+              <li>✓ <strong>bip39</strong>: Generate and validate 12-word seed phrases (BIP39 standard)</li>
             </ul>
           </div>
         </CardContent>
@@ -78,14 +75,24 @@ export function Step3Dependencies() {
             filename="next.config.mjs"
             code={`/** @type {import('next').NextConfig} */
 const nextConfig = {
-  webpack: (config) => {
-    // Disable Node.js modules in browser
-    config.resolve.fallback = {
-      ...config.resolve.fallback,
-      tls: false,
-      net: false,
-      fs: false,
-      dns: false,
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      // Exclude Node.js modules from browser bundle
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        net: false,
+        tls: false,
+        crypto: false,
+        stream: false,
+        buffer: false,
+        process: false,
+        path: false,
+        os: false,
+        http: false,
+        https: false,
+        zlib: false,
+      }
     }
     return config
   },
@@ -98,9 +105,10 @@ export default nextConfig`}
           <div className="rounded-lg bg-purple-500/10 border border-purple-500/20 p-4">
             <h4 className="font-semibold text-sm text-purple-600 mb-2">What this does:</h4>
             <ul className="text-sm space-y-1 text-muted-foreground">
-              <li>• <strong>tls/net:</strong> Network modules (not needed, Rostrum uses WebSockets)</li>
-              <li>• <strong>fs:</strong> File system (not available in browser)</li>
-              <li>• <strong>dns:</strong> DNS resolution (handled by browser)</li>
+              <li>• <strong>isServer check:</strong> Only applies fallbacks to browser bundle (not server-side)</li>
+              <li>• <strong>fs/net/tls/crypto:</strong> Node.js modules not available in browser</li>
+              <li>• <strong>stream/buffer/process:</strong> Core Node.js APIs</li>
+              <li>• <strong>All set to false:</strong> Tells webpack to ignore these modules</li>
             </ul>
           </div>
         </CardContent>

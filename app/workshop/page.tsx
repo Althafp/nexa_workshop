@@ -1,10 +1,11 @@
 "use client"
 
 import Link from "next/link"
+import Image from "next/image"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { ArrowRight, Clock, Code, Wallet, ArrowLeftRight } from "lucide-react"
+import { ArrowRight, Clock, Code, Wallet, ArrowLeftRight, ArrowLeft } from "lucide-react"
 
 export default function WorkshopPage() {
   const projects = [
@@ -16,7 +17,8 @@ export default function WorkshopPage() {
       duration: "60 min",
       icon: Wallet,
       topics: ["Wallet SDK", "Rostrum", "Transactions", "React/TypeScript"],
-      href: "/workshop/transaction-dapp"
+      href: "/workshop/transaction-dapp",
+      available: true
     },
     {
       id: 2,
@@ -26,23 +28,36 @@ export default function WorkshopPage() {
       duration: "45 min",
       icon: ArrowLeftRight,
       topics: ["NexScript", "Contract Deployment", "Contract Calls"],
-      href: "/workshop/contract-dapp"
+      href: "/workshop/contract-dapp",
+      available: false
     }
   ]
 
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b border-border">
+      <header className="border-b border-border sticky top-0 bg-background/95 backdrop-blur z-10">
         <div className="mx-auto max-w-7xl px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="h-5 w-5 rounded-md bg-neon" aria-hidden />
+          <div className="flex items-center gap-4">
+            <Link href="/" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+              <ArrowLeft className="h-4 w-4" />
+              Back to Home
+            </Link>
+          </div>
+          <Link href="/" className="flex items-center gap-2 absolute left-1/2 -translate-x-1/2">
+            <Image 
+              src="/nexa.jpg" 
+              alt="Nexa Logo" 
+              width={28} 
+              height={28} 
+              className="rounded-md"
+            />
             <span className="text-sm font-semibold tracking-wide">Nexa Workshop</span>
           </Link>
-          <Button asChild variant="outline">
+          <Button asChild variant="outline" size="sm">
             <Link href="/playground">
               <Code className="mr-2 h-4 w-4" />
-              Demo Dapp
+              Demo DApp
             </Link>
           </Button>
         </div>
@@ -67,13 +82,20 @@ export default function WorkshopPage() {
           {projects.map((project) => {
             const Icon = project.icon
             return (
-              <Card key={project.id} className="group relative overflow-hidden transition-all hover:shadow-lg hover:border-neon/50">
+              <Card key={project.id} className={`group relative overflow-hidden transition-all ${project.available ? 'hover:shadow-lg hover:border-neon/50' : 'opacity-75'}`}>
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div className="rounded-lg bg-neon/10 p-3">
                       <Icon className="h-6 w-6 text-neon" />
                     </div>
-                    <Badge variant="secondary">{project.difficulty}</Badge>
+                    <div className="flex gap-2">
+                      <Badge variant="secondary">{project.difficulty}</Badge>
+                      {!project.available && (
+                        <Badge variant="outline" className="bg-yellow-500/10 text-yellow-600 border-yellow-500/30">
+                          Coming Soon
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                   <CardTitle className="mt-4">{project.title}</CardTitle>
                   <CardDescription className="mt-2">{project.description}</CardDescription>
@@ -92,12 +114,18 @@ export default function WorkshopPage() {
                       </Badge>
                     ))}
                   </div>
-                  <Button asChild className="w-full group-hover:bg-neon group-hover:text-background transition-colors">
-                    <Link href={project.href}>
-                      Start Project
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Link>
-                  </Button>
+                  {project.available ? (
+                    <Button asChild className="w-full group-hover:bg-neon group-hover:text-background transition-colors">
+                      <Link href={project.href}>
+                        Start Project
+                        <ArrowRight className="ml-2 h-4 w-4" />
+                      </Link>
+                    </Button>
+                  ) : (
+                    <Button disabled className="w-full">
+                      Coming Soon
+                    </Button>
+                  )}
                 </CardContent>
               </Card>
             )

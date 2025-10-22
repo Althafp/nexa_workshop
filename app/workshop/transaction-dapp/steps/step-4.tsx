@@ -65,27 +65,36 @@ touch lib/nexa-wallet.ts`}
           <CodeBlock 
             filename="lib/nexa-wallet.ts"
             code={`// lib/nexa-wallet.ts
-import * as bip39 from 'bip39'
-import { Wallet } from '@nexajs/wallet'
+/**
+ * Nexa Wallet Integration using official nexa-wallet-sdk
+ * https://gitlab.com/nexa/wallet-sdk-ts
+ */
 
-// Rostrum connection (shared across all operations)
-let rostrumProvider: any = null
+let rostrumConnected = false
 
 /**
- * Ensures Rostrum is connected before operations
+ * Ensure Rostrum provider is connected
  */
-async function ensureRostrumConnection(network: 'testnet' | 'mainnet' = 'testnet') {
-  if (!rostrumProvider) {
-    const { rostrumProvider: provider } = await import('@nexajs/wallet')
-    rostrumProvider = provider
+async function ensureRostrumConnection(network: 'mainnet' | 'testnet' = 'testnet') {
+  if (typeof window === 'undefined') {
+    return false
   }
-  
-  if (!rostrumProvider.isConnected) {
-    await rostrumProvider.connect(network)
-    console.log(\`✅ Rostrum connected to \${network}\`)
+
+  try {
+    const { rostrumProvider } = await import('nexa-wallet-sdk')
+    
+    if (!rostrumConnected) {
+      // Connect to network as per SDK docs
+      await rostrumProvider.connect(network)
+      rostrumConnected = true
+      console.log(\`✅ Rostrum connected to \${network}\`)
+    }
+    
+    return true
+  } catch (error) {
+    console.error('Failed to connect to Rostrum:', error)
+    return false
   }
-  
-  return rostrumProvider
 }`}
             language="typescript"
           />
@@ -119,43 +128,87 @@ async function ensureRostrumConnection(network: 'testnet' | 'mainnet' = 'testnet
           <CodeBlock 
             filename="lib/nexa-wallet.ts (add to file)"
             code={`/**
- * Generates a new HD wallet with seed phrase
+ * Generate a new HD wallet with seed phrase
  */
-export async function generateWallet(network: 'testnet' | 'mainnet' = 'testnet') {
+export async function generateWallet(network: 'mainnet' | 'testnet' = 'testnet') {
   try {
-    // 1. Generate 12-word seed phrase
-    const mnemonic = bip39.generateMnemonic(128)
+    // Ensure Rostrum is connected
+    await ensureRostrumConnection(network)
     
-    // 2. Connect to Rostrum
-    const provider = await ensureRostrumConnection(network)
+    // Generate 12-word seed phrase using standalone BIP39 library
+    const bip39 = await import('bip39')
+    const mnemonic = bip39.generateMnemonic()
     
-    // 3. Create Wallet from mnemonic
-    const wallet = new Wallet(mnemonic)
+    // Create wallet from seed phrase using nexa-wallet-sdk
+    const { Wallet } = await import('nexa-wallet-sdk')
+    
+    // Create wallet instance
+    const wallet = new Wallet(mnemonic, network)
+    
+    // Initialize wallet (discovers accounts)
     await wallet.initialize()
     
-    // 4. Get Account '0' (default account)
-    const account = wallet.accountStore.getAccount('0')
-    if (!account) throw new Error('Failed to initialize account')
+    // Try account '0' first (official wallet compatibility)
+    let account = wallet.accountStore.getAccount('0')
     
-    // 5. Refresh account to sync balance
-    await account.refresh()
-    
-    // 6. Extract address and keys
-    const receiveKey = account._accountKeys?.receiveKeys?.[0]
-    if (!receiveKey) throw new Error('No receive key found')
-    
-    return {
-      wallet,
-      account,
-      address: receiveKey.address,
-      publicKey: receiveKey.publicKey?.toString('hex') || '',
-      privateKey: receiveKey.privateKey?.toString('hex') || '',
-      seedPhrase: mnemonic,
-      network,
-      balance: BigInt(0)
+    if (!account) {
+      // Fallback to '1.0' if '0' doesn't exist
+      account = wallet.accountStore.getAccount('1.0')
     }
-  } catch (error: any) {
-    throw new Error(\`Failed to generate wallet: \${error.message}\`)
+    
+    if (!account) {
+      throw new Error('Failed to get account from wallet')
+    }
+
+    // Extract address and keys
+    let address = ''
+    let publicKey = ''
+    let privateKey = ''
+    
+    // Check for default account type (has receiveKeys)
+    const accountKeys = (account as any)._accountKeys
+    const accountKey = (account as any)._accountKey
+    
+    if (accountKeys && accountKeys.receiveKeys && accountKeys.receiveKeys.length > 0) {
+      const firstReceiveKey = accountKeys.receiveKeys[0]
+      address = firstReceiveKey.address || ''
+      
+      if (firstReceiveKey.key) {
+        publicKey = firstReceiveKey.key.publicKey?.toString?.() || ''
+        if (firstReceiveKey.key.privateKey && typeof firstReceiveKey.key.privateKey.toWIF === 'function') {
+          privateKey = firstReceiveKey.key.privateKey.toWIF()
+        }
+      }
+    } else if (accountKey) {
+      address = accountKey.address || ''
+      
+      if (accountKey.key) {
+        publicKey = accountKey.key.publicKey?.toString?.() || ''
+        if (accountKey.key.privateKey && typeof accountKey.key.privateKey.toWIF === 'function') {
+          privateKey = accountKey.key.privateKey.toWIF()
+        }
+      }
+    }
+    
+    // Get balance
+    const accountBalance = account.balance || { confirmed: '0', unconfirmed: '0' }
+    const confirmed = Number(accountBalance.confirmed || 0)
+    const unconfirmed = Number(accountBalance.unconfirmed || 0)
+    const totalBalance = BigInt(confirmed + unconfirmed)
+
+    return {
+      seedPhrase: mnemonic,
+      address: address,
+      publicKey: publicKey,
+      privateKey: privateKey,
+      balance: totalBalance,
+      network,
+      wallet: wallet,
+      account: account,
+    }
+  } catch (error) {
+    console.error('Error generating wallet:', error)
+    throw error
   }
 }`}
             language="typescript"
@@ -189,48 +242,83 @@ export async function generateWallet(network: 'testnet' | 'mainnet' = 'testnet')
           <CodeBlock 
             filename="lib/nexa-wallet.ts (add to file)"
             code={`/**
- * Restores wallet from existing seed phrase
+ * Import wallet from seed phrase
  */
 export async function importFromSeedPhrase(
   seedPhrase: string,
-  network: 'testnet' | 'mainnet' = 'testnet'
+  network: 'mainnet' | 'testnet' = 'testnet'
 ) {
   try {
-    // 1. Validate seed phrase
-    if (!bip39.validateMnemonic(seedPhrase.trim())) {
-      throw new Error('Invalid seed phrase')
-    }
+    // Ensure Rostrum is connected
+    await ensureRostrumConnection(network)
     
-    // 2. Connect to network
-    const provider = await ensureRostrumConnection(network)
+    const { Wallet } = await import('nexa-wallet-sdk')
     
-    // 3. Restore wallet
-    const wallet = new Wallet(seedPhrase.trim())
+    // Create wallet from seed phrase
+    const wallet = new Wallet(seedPhrase.trim(), network)
+    
+    // Initialize wallet (discovers accounts)
     await wallet.initialize()
     
-    // 4. Get Account '0'
-    const account = wallet.accountStore.getAccount('0')
-    if (!account) throw new Error('Failed to initialize account')
+    // Try account '0' first
+    let account = wallet.accountStore.getAccount('0')
     
-    // 5. Refresh to sync
-    await account.refresh()
-    
-    // 6. Extract address and keys
-    const receiveKey = account._accountKeys?.receiveKeys?.[0]
-    if (!receiveKey) throw new Error('No receive key found')
-    
-    return {
-      wallet,
-      account,
-      address: receiveKey.address,
-      publicKey: receiveKey.publicKey?.toString('hex') || '',
-      privateKey: receiveKey.privateKey?.toString('hex') || '',
-      seedPhrase: seedPhrase.trim(),
-      network,
-      balance: BigInt(0)
+    if (!account) {
+      account = wallet.accountStore.getAccount('1.0')
     }
-  } catch (error: any) {
-    throw new Error(\`Failed to import wallet: \${error.message}\`)
+    
+    if (!account) {
+      throw new Error('Failed to get account from wallet')
+    }
+
+    // Extract address and keys (same logic as generateWallet)
+    let address = ''
+    let publicKey = ''
+    let privateKey = ''
+    
+    const accountKeys = (account as any)._accountKeys
+    const accountKey = (account as any)._accountKey
+    
+    if (accountKeys && accountKeys.receiveKeys && accountKeys.receiveKeys.length > 0) {
+      const firstReceiveKey = accountKeys.receiveKeys[0]
+      address = firstReceiveKey.address || ''
+      
+      if (firstReceiveKey.key) {
+        publicKey = firstReceiveKey.key.publicKey?.toString?.() || ''
+        if (firstReceiveKey.key.privateKey && typeof firstReceiveKey.key.privateKey.toWIF === 'function') {
+          privateKey = firstReceiveKey.key.privateKey.toWIF()
+        }
+      }
+    } else if (accountKey) {
+      address = accountKey.address || ''
+      
+      if (accountKey.key) {
+        publicKey = accountKey.key.publicKey?.toString?.() || ''
+        if (accountKey.key.privateKey && typeof accountKey.key.privateKey.toWIF === 'function') {
+          privateKey = accountKey.key.privateKey.toWIF()
+        }
+      }
+    }
+    
+    // Get balance
+    const accountBalance = account.balance || { confirmed: '0', unconfirmed: '0' }
+    const confirmed = Number(accountBalance.confirmed || 0)
+    const unconfirmed = Number(accountBalance.unconfirmed || 0)
+    const totalBalance = BigInt(confirmed + unconfirmed)
+
+    return {
+      seedPhrase: seedPhrase.trim(),
+      address: address,
+      publicKey: publicKey,
+      privateKey: privateKey,
+      balance: totalBalance,
+      network,
+      wallet: wallet,
+      account: account,
+    }
+  } catch (error) {
+    console.error('Error importing wallet:', error)
+    throw error
   }
 }`}
             language="typescript"
@@ -256,29 +344,43 @@ export async function importFromSeedPhrase(
           <CodeBlock 
             filename="lib/nexa-wallet.ts (add to file)"
             code={`/**
- * Converts satoshis to NEXA (1 NEXA = 100 satoshis)
+ * Format amount in NEXA (from satoshis)
  */
-export function formatNexa(satoshis: bigint | string): string {
-  const sats = typeof satoshis === 'string' ? BigInt(satoshis) : satoshis
-  return (Number(sats) / 100).toFixed(2)
+export function formatNexa(satoshis: bigint): string {
+  const nexa = Number(satoshis) / 100
+  return nexa.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })
 }
 
 /**
- * Converts NEXA to satoshis
+ * Parse amount to satoshis (from NEXA)
  */
-export function parseNexa(nexa: string): bigint {
-  return BigInt(Math.round(parseFloat(nexa) * 100))
+export function parseNexa(nexa: string): string {
+  const amount = parseFloat(nexa)
+  if (isNaN(amount)) {
+    throw new Error('Invalid amount')
+  }
+  const satoshis = Math.floor(amount * 100)
+  return satoshis.toString()
 }
 
 /**
- * Validates Nexa address format
+ * Validate Nexa address using SDK utility
  */
-export function validateAddress(address: string): boolean {
+export async function validateAddress(address: string): Promise<boolean> {
   try {
-    const { isValidNexaAddress } = require('@nexajs/wallet')
-    return isValidNexaAddress(address)
-  } catch {
-    return address.startsWith('nexa:') && address.length > 40
+    const { isValidNexaAddress } = await import('nexa-wallet-sdk')
+    
+    // Use SDK's validation utility
+    const isValid = isValidNexaAddress(address, 'testnet') || 
+                    isValidNexaAddress(address, 'mainnet')
+    return isValid
+  } catch (error) {
+    console.error('Address validation error:', error)
+    // Fallback: basic format check
+    return address.startsWith('nexa:') || address.startsWith('nexatest:')
   }
 }`}
             language="typescript"
@@ -313,51 +415,60 @@ export function validateAddress(address: string): boolean {
           <CodeBlock 
             filename="lib/nexa-wallet.ts (add to file)"
             code={`/**
- * Sends NEXA to another address
+ * Send transaction using official SDK
  */
-export async function sendTransaction(
-  wallet: any,
-  account: any,
-  toAddress: string,
-  amount: bigint,
-  network: 'testnet' | 'mainnet' = 'testnet'
-) {
+export async function sendTransaction(params: {
+  wallet: any // Wallet instance
+  account: any // Account instance
+  toAddress: string
+  amount: string // Amount in satoshis (as string)
+  network: 'mainnet' | 'testnet'
+}) {
   try {
-    // 1. Validate address
-    if (!validateAddress(toAddress)) {
-      throw new Error('Invalid recipient address')
+    const { wallet, account, toAddress, amount, network } = params
+    
+    console.log('Sending transaction:', { toAddress, amount, network })
+
+    // Check if amount is above dust threshold
+    const amountNum = Number(amount)
+    if (amountNum < 1000) { // 1000 satoshis = 10 NEXA minimum
+      throw new Error('Amount too small (dust). Minimum is 10 NEXA (1000 satoshis)')
     }
-    
-    // 2. Check minimum (dust prevention)
-    const MIN_AMOUNT = BigInt(1000) // 10 NEXA
-    if (amount < MIN_AMOUNT) {
-      throw new Error('Minimum: 10 NEXA')
-    }
-    
-    // 3. Connect to network
-    await ensureRostrumConnection(network)
-    
-    // 4. Build transaction
-    const transaction = await wallet
-      .newTransaction(account)
+
+    // Build and sign transaction using wallet SDK's fluent API
+    const tx = await wallet.newTransaction(account)
       .onNetwork(network)
-      .sendTo(toAddress, amount)
-      .populate()  // Fetch UTXOs
-      .sign()      // Sign with private key
-      .build()     // Finalize
+      .sendTo(toAddress, amount) // Amount in satoshis
+      .populate() // Fetches UTXOs and calculates fees
+      .sign() // Signs with wallet
+      .build() // Builds final transaction
     
-    // 5. Broadcast
-    const txid = await wallet.sendTransaction(transaction)
+    console.log('Transaction built:', tx)
+
+    // Broadcast transaction to network
+    const txid = await wallet.sendTransaction(tx)
     
-    // 6. Refresh balance
-    setTimeout(() => account.refresh(), 1000)
+    console.log('Transaction broadcasted:', txid)
     
-    return txid
-  } catch (error: any) {
-    if (error.message?.includes('dust')) {
-      throw new Error('Amount too small. Minimum: 10 NEXA')
+    return {
+      txid: txid,
+      success: true,
+      message: \`Sent \${Number(amount) / 100} NEXA to \${toAddress}\`,
     }
-    throw new Error(\`Transaction failed: \${error.message}\`)
+  } catch (error) {
+    console.error('Transaction error:', error)
+    
+    // Provide helpful error messages
+    if (error instanceof Error) {
+      if (error.message.includes('dust')) {
+        throw new Error('Transaction rejected: Amount too small. Minimum is 10 NEXA.')
+      }
+      if (error.message.includes('Insufficient')) {
+        throw new Error('Insufficient balance. Check your balance and try again.')
+      }
+    }
+    
+    throw error
   }
 }`}
             language="typescript"

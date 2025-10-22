@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import Image from "next/image"
 import { motion } from "framer-motion"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
@@ -17,7 +18,13 @@ export function Hero() {
     >
       <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-4">
         <Link href="/" className="flex items-center gap-2">
-          <div className="h-5 w-5 rounded-md bg-neon" aria-hidden />
+          <Image 
+            src="/nexa.jpg" 
+            alt="Nexa Logo" 
+            width={28} 
+            height={28} 
+            className="rounded-md"
+          />
           <span className="text-sm font-semibold tracking-wide">Nexa Workshop</span>
         </Link>
         <div className="flex items-center gap-2">
@@ -41,9 +48,9 @@ export function Hero() {
 
           <div className="mt-8 flex flex-wrap items-center gap-4">
             <Button asChild size="lg" className="rounded-2xl ring-2 ring-neon hover:ring-4 transition-all text-lg px-8 py-6">
-              <Link href="/workshop/transaction-dapp" className="inline-flex items-center gap-2">
+              <Link href="/workshop" className="inline-flex items-center gap-2">
                 <Rocket className="h-5 w-5" />
-                <span>Build Your Own DApp</span>
+                <span>Start Learning</span>
               </Link>
             </Button>
             <Button

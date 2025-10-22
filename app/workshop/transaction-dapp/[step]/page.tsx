@@ -33,14 +33,19 @@ export default function StepPage() {
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="border-b border-border sticky top-0 bg-background/95 backdrop-blur z-10">
-        <div className="mx-auto max-w-5xl px-4 py-4">
+        <div className="mx-auto max-w-5xl px-4 py-4 flex items-center justify-between">
           <Link 
             href="/workshop/transaction-dapp" 
-            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back to Tutorial
+            Back to Tutorial Overview
           </Link>
+          <Button asChild size="sm" variant="ghost">
+            <Link href="/playground" className="flex items-center gap-2">
+              Demo DApp
+            </Link>
+          </Button>
         </div>
       </header>
 

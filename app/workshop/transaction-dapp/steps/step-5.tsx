@@ -84,7 +84,7 @@ export default function Home() {
           
           <CodeBlock 
             code={`npx shadcn@latest init -y
-npx shadcn@latest add button card input alert badge`}
+npx shadcn@latest add button card input alert badge label tabs`}
             language="bash"
           />
 
